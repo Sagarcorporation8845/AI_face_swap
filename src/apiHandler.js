@@ -75,7 +75,7 @@ async function submitVideoTask(videoGetUrl, imageGetUrl, authToken, duration = 7
       duration: duration,
       start_clip_sec: 0,
       end_clip_sec: duration,
-      face_enhance: false,
+      face_enhance: true,
     };
     const response = await axios.post(`${API_BASE_URL}/api/fs/gifvideo/mutilface`, payload, {
       headers: {

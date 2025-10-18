@@ -201,6 +201,7 @@ const handleMedia = async (ctx, mediaType, fileInfo) => {
       console.log(`[DEBUG] User ${userId}: Handing off to API processor.`);
 
       (async () => {
+        let localResultPath; // Define here to access in finally block
         try {
           const currentState = await stateManager.getState(userId);
           if (!currentState) {
@@ -209,42 +210,45 @@ const handleMedia = async (ctx, mediaType, fileInfo) => {
           }
 
           const outputUrl = await apiHandler.processSwap(
-            currentState.type, 
-            currentState.targetPath, 
+            currentState.type,
+            currentState.targetPath,
             currentState.sourcePath,
             currentState.duration
           );
+
+          // --- FIX APPLIED HERE ---
+          // 1. Download the final result from the URL to our server.
+          console.log(`[DEBUG] User ${userId} (BG Task): Downloading final result from URL...`);
+          localResultPath = await fileHelper.downloadFromUrl(outputUrl, userId);
 
           const replyOptions = {
             caption: ui.messages.success,
             ...ui.keyboards.mainMenu
           };
-          
+
+          // 2. Send the downloaded local file instead of the URL.
           if (currentState.type === 'video') {
-            await ctx.replyWithVideo(outputUrl, replyOptions);
+            await ctx.replyWithVideo({ source: localResultPath }, replyOptions);
           } else {
-            await ctx.replyWithPhoto(outputUrl, replyOptions);
+            await ctx.replyWithPhoto({ source: localResultPath }, replyOptions);
           }
-        
+
           await ctx.telegram.deleteMessage(ctx.chat.id, processingMessage.message_id);
 
         } catch (apiError) {
           console.error(`[DEBUG] User ${userId} (BG Task): CATCH BLOCK: ${apiError.message}`);
-          
-          // --- ROBUST ERROR HANDLING FIX ---
           try {
-            // First, try to edit the original message.
             await ctx.telegram.editMessageText(ctx.chat.id, processingMessage.message_id, undefined, ui.messages.error);
           } catch (editError) {
-            // If editing fails (e.g., message not found), send a new message instead.
             console.error(`[DEBUG] User ${userId} (BG Task): Failed to edit message, sending new one. Reason: ${editError.message}`);
             await ctx.reply(ui.messages.error);
           }
-        
+
         } finally {
           console.log(`[DEBUG] User ${userId} (BG Task): Running 'finally' block. Cleaning up files.`);
           const finalState = await stateManager.getState(userId) || state;
-          fileHelper.deleteFiles([finalState.targetPath, finalState.sourcePath]);
+          // 3. Make sure the downloaded result file is also deleted.
+          fileHelper.deleteFiles([finalState.targetPath, finalState.sourcePath, localResultPath]);
           await stateManager.clearState(userId);
         }
       })();

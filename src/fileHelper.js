@@ -21,43 +21,72 @@ const downloadFile = async (ctx, fileId, extension) => {
     const fileLink = await ctx.telegram.getFileLink(fileId);
     const uniqueName = `${ctx.from.id}_${Date.now()}.${extension}`;
     const localPath = path.join(tempDir, uniqueName);
-
     const response = await axios({
       method: 'get',
       url: fileLink.href,
       responseType: 'stream',
     });
-
     const writer = fs.createWriteStream(localPath);
-
-    // --- THIS IS THE ROBUST PROMISE LOGIC ---
     return new Promise((resolve, reject) => {
       response.data.pipe(writer);
-
-      response.data.on('error', err => { // Error on the download stream
-        console.error(`[DEBUG] fileHelper: Download stream error: ${err.message}`);
+      let error = null;
+      writer.on('error', err => {
+        error = err;
         writer.close();
-        fs.unlink(localPath, () => {}); // Clean up broken file
         reject(err);
       });
-      
-      writer.on('error', err => { // Error on the file-writing stream
-        console.error(`[DEBUG] fileHelper: File write error: ${err.message}`);
-        fs.unlink(localPath, () => {}); // Clean up broken file
-        reject(err);
-      });
-      
-      writer.on('finish', () => { // Success
-        console.log(`[DEBUG] fileHelper: File downloaded successfully to ${localPath}`);
-        resolve(localPath);
+      writer.on('close', () => {
+        if (!error) {
+          console.log(`[DEBUG] fileHelper: File downloaded successfully to ${localPath}`);
+          resolve(localPath);
+        }
       });
     });
-
   } catch (error) {
     console.error(`[DEBUG] fileHelper: Error getting file link: ${error.message}`);
     throw new Error('Failed to download file from Telegram.');
   }
 };
+
+/**
+ * **NEW FUNCTION**
+ * Downloads a file from a public URL to the local temp directory.
+ * @param {string} url - The public URL of the file to download.
+ * @param {string} userId - The user's Telegram ID for unique naming.
+ * @returns {Promise<string>} - The local path to the downloaded file.
+ */
+const downloadFromUrl = async (url, userId) => {
+  try {
+    const extension = path.extname(url).split('?')[0].substring(1) || 'mp4';
+    const uniqueName = `${userId}_result_${Date.now()}.${extension}`;
+    const localPath = path.join(tempDir, uniqueName);
+    const response = await axios({
+      method: 'get',
+      url: url,
+      responseType: 'stream',
+    });
+    const writer = fs.createWriteStream(localPath);
+    return new Promise((resolve, reject) => {
+      response.data.pipe(writer);
+      let error = null;
+      writer.on('error', err => {
+        error = err;
+        writer.close();
+        reject(err);
+      });
+      writer.on('close', () => {
+        if (!error) {
+          console.log(`[DEBUG] fileHelper: Final result downloaded successfully to ${localPath}`);
+          resolve(localPath);
+        }
+      });
+    });
+  } catch (error) {
+    console.error(`[DEBUG] fileHelper: Error downloading final result from URL: ${error.message}`);
+    throw new Error('Failed to download final result file.');
+  }
+};
+
 
 /**
  * Deletes temporary files from the server.
@@ -67,7 +96,6 @@ const deleteFiles = (filePaths) => {
   if (!Array.isArray(filePaths)) return;
 
   filePaths.forEach((filePath) => {
-    // --- THIS CHECK PREVENTS THE CRASH ---
     if (filePath && typeof filePath === 'string' && fs.existsSync(filePath)) {
       fs.unlink(filePath, (err) => {
         if (err) console.error(`Failed to delete temp file: ${filePath}`, err);
@@ -79,4 +107,4 @@ const deleteFiles = (filePaths) => {
   });
 };
 
-module.exports = { downloadFile, deleteFiles };
+module.exports = { downloadFile, downloadFromUrl, deleteFiles };

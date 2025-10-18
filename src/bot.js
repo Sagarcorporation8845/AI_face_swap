@@ -153,12 +153,9 @@ const handleMedia = async (ctx, mediaType, fileInfo) => {
                 throw new Error("File download resulted in an invalid path.");
             }
 
-            // MODIFICATION 4: Get video duration and save it to the state.
             const newState = { ...state, stage: 'awaiting_source', targetPath };
             if (state.type === 'video') {
-                // Get the video duration from the Telegram message object
                 const videoDuration = fileInfo.duration; 
-                // Set the duration to process, capping it at 60 seconds.
                 newState.duration = Math.min(videoDuration, 60);
                 console.log(`[DEBUG] User ${userId}: Original video duration: ${videoDuration}s. Capped duration: ${newState.duration}s.`);
             }
@@ -211,31 +208,39 @@ const handleMedia = async (ctx, mediaType, fileInfo) => {
             return;
           }
 
-          // MODIFICATION 5: Pass the duration from the state to the processSwap function.
           const outputUrl = await apiHandler.processSwap(
             currentState.type, 
             currentState.targetPath, 
             currentState.sourcePath,
-            currentState.duration // Pass the duration for videos
+            currentState.duration
           );
-
-          await ctx.telegram.deleteMessage(ctx.chat.id, processingMessage.message_id);
 
           const replyOptions = {
             caption: ui.messages.success,
             ...ui.keyboards.mainMenu
           };
-
+          
           if (currentState.type === 'video') {
             await ctx.replyWithVideo(outputUrl, replyOptions);
           } else {
             await ctx.replyWithPhoto(outputUrl, replyOptions);
           }
+        
+          await ctx.telegram.deleteMessage(ctx.chat.id, processingMessage.message_id);
 
         } catch (apiError) {
           console.error(`[DEBUG] User ${userId} (BG Task): CATCH BLOCK: ${apiError.message}`);
-          await ctx.telegram.editMessageText(ctx.chat.id, processingMessage.message_id, undefined, ui.messages.error);
-
+          
+          // --- ROBUST ERROR HANDLING FIX ---
+          try {
+            // First, try to edit the original message.
+            await ctx.telegram.editMessageText(ctx.chat.id, processingMessage.message_id, undefined, ui.messages.error);
+          } catch (editError) {
+            // If editing fails (e.g., message not found), send a new message instead.
+            console.error(`[DEBUG] User ${userId} (BG Task): Failed to edit message, sending new one. Reason: ${editError.message}`);
+            await ctx.reply(ui.messages.error);
+          }
+        
         } finally {
           console.log(`[DEBUG] User ${userId} (BG Task): Running 'finally' block. Cleaning up files.`);
           const finalState = await stateManager.getState(userId) || state;

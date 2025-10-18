@@ -6,7 +6,7 @@ const { randomUUID } = require('crypto');
 
 // --- Configuration ---
 const API_BASE_URL = 'https://api.arting.ai';
-const POLLING_INTERVAL_MS = 5000;
+const POLLING_INTERVAL_MS = 5000; // Check every 5 seconds
 const CLIENT_SIDE_DELAY_MS = 100;
 
 // --- Private Helper Functions ---
@@ -62,7 +62,6 @@ async function uploadFile(putUrl, filePath, contentType) {
 
 // --- Video-Specific Functions ---
 
-// MODIFICATION 1: Removed the "duration = 7" default value.
 async function submitVideoTask(videoGetUrl, imageGetUrl, authToken, duration) {
   await new Promise(resolve => setTimeout(resolve, CLIENT_SIDE_DELAY_MS));
   try {
@@ -71,9 +70,9 @@ async function submitVideoTask(videoGetUrl, imageGetUrl, authToken, duration) {
       file_type: "video",
       target_medio_url: videoGetUrl,
       target_source_face_url: imageGetUrl,
-      duration: duration, // Now uses the passed-in duration
+      duration: duration,
       start_clip_sec: 0,
-      end_clip_sec: duration, // Now uses the passed-in duration
+      end_clip_sec: duration,
       face_enhance: true,
     };
     const response = await axios.post(`${API_BASE_URL}/api/fs/gifvideo/mutilface`, payload, {
@@ -97,7 +96,8 @@ async function submitVideoTask(videoGetUrl, imageGetUrl, authToken, duration) {
 
 async function checkVideoStatus(predictionId, authToken) {
   let attempts = 0;
-  const maxAttempts = 60; // 5 minutes
+  // MODIFICATION: Increased maxAttempts from 60 to 120 for a 10-minute timeout
+  const maxAttempts = 120; // 10 minutes (120 * 5s)
 
   while (attempts < maxAttempts) {
     attempts++;
@@ -163,7 +163,8 @@ async function submitPhotoTask(baseImageUrl, faceImageUrl, authToken) {
 async function checkPhotoStatus(requestId, authToken) {
   await new Promise(resolve => setTimeout(resolve, POLLING_INTERVAL_MS));
   let attempts = 0;
-  const maxAttempts = 60; // 5 minutes
+  // MODIFICATION: Increased maxAttempts from 60 to 120 for a 10-minute timeout
+  const maxAttempts = 120; // 10 minutes
 
   while (attempts < maxAttempts) {
     attempts++;
@@ -205,7 +206,6 @@ async function checkPhotoStatus(requestId, authToken) {
  * @param {number} [duration] - The duration of the video to process (only for video type).
  * @returns {Promise<string>} - The URL of the final output file.
  */
-// MODIFICATION 2: Added 'duration' parameter to processSwap
 const processSwap = async (type, targetPath, sourcePath, duration) => {
   const authToken = randomUUID();
   
@@ -236,7 +236,6 @@ const processSwap = async (type, targetPath, sourcePath, duration) => {
   let outputUrl;
   if (type === 'video') {
     console.log(`[${authToken}] Submitting video task...`);
-    // MODIFICATION 3: Pass the duration to the submitVideoTask function.
     const taskId = await submitVideoTask(targetUrls.get, sourceUrls.get, authToken, duration);
     console.log(`[${authToken}] Polling video task: ${taskId}`);
     outputUrl = await checkVideoStatus(taskId, authToken);

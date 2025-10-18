@@ -34,12 +34,10 @@ async function getSignedUrl(fileSuffix) {
 }
 
 async function uploadFile(putUrl, filePath, contentType) {
-  // --- DEBUG LOG 7 ---
   console.log(`[DEBUG] uploadFile: Attempting to read file from path: ${filePath}`);
   
   if (!filePath || typeof filePath !== 'string') {
     console.error(`[DEBUG] uploadFile: FATAL! Received invalid filePath: ${filePath}`);
-    // This is the error you were seeing.
     throw new Error(`The "path" argument must be of type string. Received ${typeof filePath}`);
   }
   
@@ -64,7 +62,8 @@ async function uploadFile(putUrl, filePath, contentType) {
 
 // --- Video-Specific Functions ---
 
-async function submitVideoTask(videoGetUrl, imageGetUrl, authToken, duration = 7) {
+// MODIFICATION 1: Removed the "duration = 7" default value.
+async function submitVideoTask(videoGetUrl, imageGetUrl, authToken, duration) {
   await new Promise(resolve => setTimeout(resolve, CLIENT_SIDE_DELAY_MS));
   try {
     const payload = {
@@ -72,9 +71,9 @@ async function submitVideoTask(videoGetUrl, imageGetUrl, authToken, duration = 7
       file_type: "video",
       target_medio_url: videoGetUrl,
       target_source_face_url: imageGetUrl,
-      duration: duration,
+      duration: duration, // Now uses the passed-in duration
       start_clip_sec: 0,
-      end_clip_sec: duration,
+      end_clip_sec: duration, // Now uses the passed-in duration
       face_enhance: true,
     };
     const response = await axios.post(`${API_BASE_URL}/api/fs/gifvideo/mutilface`, payload, {
@@ -203,17 +202,16 @@ async function checkPhotoStatus(requestId, authToken) {
  * @param {'video' | 'photo'} type - The type of swap to perform.
  * @param {string} targetPath - Local path to the target video/photo.
  * @param {string} sourcePath - Local path to the source face photo.
- *TA
+ * @param {number} [duration] - The duration of the video to process (only for video type).
  * @returns {Promise<string>} - The URL of the final output file.
  */
-const processSwap = async (type, targetPath, sourcePath) => {
+// MODIFICATION 2: Added 'duration' parameter to processSwap
+const processSwap = async (type, targetPath, sourcePath, duration) => {
   const authToken = randomUUID();
   
-  // --- DEBUG LOG 5 ---
   console.log(`[DEBUG] apiHandler.processSwap: Received targetPath: ${targetPath}`);
   console.log(`[DEBUG] apiHandler.processSwap: Received sourcePath: ${sourcePath}`);
 
-  // --- DEBUG CHECK ---
   if (!targetPath || !sourcePath || typeof targetPath !== 'string' || typeof sourcePath !== 'string') {
     console.error("[DEBUG] FATAL: processSwap received an undefined or invalid path.");
     throw new Error("processSwap received an undefined path. Check bot.js logs.");
@@ -221,7 +219,6 @@ const processSwap = async (type, targetPath, sourcePath) => {
 
   console.log(`[${authToken}] Starting ${type} swap task...`);
 
-  // 1. Get Signed URLs
   const targetExt = type === 'video' ? 'mp4' : path.extname(targetPath).substring(1);
   const sourceExt = 'png';
   const targetContentType = type === 'video' ? 'video/mp4' : `image/${targetExt}`;
@@ -229,7 +226,6 @@ const processSwap = async (type, targetPath, sourcePath) => {
   const targetUrls = await getSignedUrl(targetExt);
   const sourceUrls = await getSignedUrl(sourceExt);
 
-  // 2. Upload Files in Parallel
   console.log(`[${authToken}] Uploading files...`);
   await Promise.all([
     uploadFile(targetUrls.put, targetPath, targetContentType),
@@ -237,11 +233,11 @@ const processSwap = async (type, targetPath, sourcePath) => {
   ]);
   console.log(`[${authToken}] Uploads complete.`);
 
-  // 3. Submit & Poll
   let outputUrl;
   if (type === 'video') {
     console.log(`[${authToken}] Submitting video task...`);
-    const taskId = await submitVideoTask(targetUrls.get, sourceUrls.get, authToken);
+    // MODIFICATION 3: Pass the duration to the submitVideoTask function.
+    const taskId = await submitVideoTask(targetUrls.get, sourceUrls.get, authToken, duration);
     console.log(`[${authToken}] Polling video task: ${taskId}`);
     outputUrl = await checkVideoStatus(taskId, authToken);
   } else {

@@ -2,8 +2,9 @@ const { Markup } = require('telegraf');
 
 const keyboards = {
   mainMenu: Markup.inlineKeyboard([
-    Markup.button.callback('🎬 Video Face Swap', 'start_video_swap'),
-    Markup.button.callback('🖼️ Photo Face Swap', 'start_photo_swap'),
+    [Markup.button.callback('🎬 Video Face Swap', 'start_video_swap')],
+    [Markup.button.callback('🖼️ Photo Face Swap', 'start_photo_swap')],
+    [Markup.button.callback('✨ AI Image Enhancer', 'start_image_enhance')],
   ]),
   joinGroup: (groupLink) => Markup.inlineKeyboard([
     Markup.button.url('🚀 Join Our Community', groupLink),
@@ -37,10 +38,12 @@ const messages = {
   sendTargetVideo: "Great! Please send me the **target video** you want to add a face to.\n\n(MP4 format only)",
   sendTargetPhoto: "Great! Please send me the **base photo** you want to add a face to.\n\n(PNG or JPG format only)",
   sendSourceFace: "✅ Got it! Now, please send me the **source face image**.\n\n(PNG format only)",
+  sendEnhanceImage: "Great! Please send me the **image** you want to enhance.\n\n(PNG or JPG format only)",
   processing: "⏳ Thank you! I have everything I need.\n\nYour request is processing. This may take a minute or two, please wait...",
   error: "❌ An error occurred.\n\nSomething went wrong while processing your request. Please try again later.",
   cancel: "✅ Operation cancelled. Send /start to begin a new task.",
   success: "✅ Success! Here is your swapped file.\n\nReady for another task?",
+  enhanceSuccess: "✅ Success! Here is your enhanced image.\n\nReady for another task?",
   invalidFileType: "⚠️ **Invalid File Type!**\n\nPlease send a file in the correct format.",
   invalidState: "Please send /start to begin.",
   membershipRequired: "To use this bot, you must first join our main Telegram group.",
@@ -57,6 +60,7 @@ const messages = {
 ▫️ <b>Total Users:</b> ${stats.totalUsers}
 ▫️ <b>Photo Swaps:</b> ${stats.totalPhotoSwaps}
 ▫️ <b>Video Swaps:</b> ${stats.totalVideoSwaps}
+▫️ <b>Image Enhances:</b> ${stats.totalImageEnhances}
 
 📈 <b>Today's Activity</b>
 ▫️ <b>New Users:</b> ${stats.newUsersToday}

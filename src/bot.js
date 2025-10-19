@@ -3,12 +3,141 @@ const { Telegraf, Markup } = require('telegraf');
 const stateManager = require('./stateManager');
 const apiHandler = require('./apiHandler');
 const fileHelper = require('./fileHelper');
-const ui = require('./ui');
+const ui =require('./ui');
 const db = require('./db');
 
-const bot = new Telegraf(process.env.BOT_TOKEN);
+// Correctly configure the Telegraf bot with an increased API timeout
+const bot = new Telegraf(process.env.BOT_TOKEN, {
+  telegram: {
+    apiTimeout: 600000, // 10 minutes
+  },
+});
+
 const CHANNEL_ID = process.env.CHANNEL_ID;
 const ADMIN_ID = process.env.ADMIN_ID ? parseInt(process.env.ADMIN_ID, 10) : null;
+
+// This function contains the long-running logic for processing media.
+const processMedia = async (ctx, mediaType, fileInfo) => {
+    const userId = ctx.from.id;
+    const state = await stateManager.getState(userId);
+
+    if (!state) {
+        if (!await checkMembership(ctx)) return sendMembershipPrompt(ctx);
+        return ctx.reply(ui.messages.invalidState);
+    }
+
+    if (state.stage === 'awaiting_target') {
+        if ((state.type === 'video' && mediaType !== 'video') || (state.type === 'photo' && mediaType !== 'photo')) {
+            return ctx.reply(ui.messages.invalidFileType);
+        }
+        const downloadMessage = await ctx.reply("✅ File received. Processing...");
+        try {
+            const extension = mediaType === 'video' ? 'mp4' : (fileInfo.mime_type?.split('/')[1] || 'png');
+            const targetPath = await fileHelper.downloadFile(ctx, fileInfo.file_id, extension);
+            const newState = { ...state, stage: 'awaiting_source', targetPath };
+            if (state.type === 'video') {
+                newState.duration = Math.min(fileInfo.duration, 60);
+            }
+            await stateManager.setState(userId, newState);
+            await ctx.telegram.deleteMessage(ctx.chat.id, downloadMessage.message_id);
+            await ctx.reply(ui.messages.sendSourceFace, { parse_mode: 'Markdown' });
+        } catch (downloadError) {
+            console.error(`[DEBUG] Target Download Error:`, downloadError);
+            await ctx.telegram.editMessageText(ctx.chat.id, downloadMessage.message_id, undefined, '❌ Error downloading file.').catch(() => {});
+            await stateManager.clearState(userId);
+        }
+    } else if (state.stage === 'awaiting_source') {
+        if (mediaType !== 'photo') {
+            return ctx.reply('Invalid file type for source face.', { parse_mode: 'Markdown' });
+        }
+        let processingMessage;
+        try {
+            const extension = fileInfo.mime_type?.split('/')[1] || 'png';
+            const sourcePath = await fileHelper.downloadFile(ctx, fileInfo.file_id, extension);
+            processingMessage = await ctx.reply(ui.messages.processing);
+            await stateManager.setState(userId, { ...state, sourcePath });
+
+            let localResultPath;
+            let swapSuccess = false;
+            try {
+                const currentState = await stateManager.getState(userId);
+                if (!currentState) return;
+                const outputUrl = await apiHandler.processSwap(currentState.type, currentState.targetPath, currentState.sourcePath, currentState.duration);
+                localResultPath = await fileHelper.downloadFromUrl(outputUrl, userId);
+                const replyOptions = { caption: ui.messages.success, ...ui.keyboards.mainMenu };
+
+                if (currentState.type === 'video') {
+                    await ctx.replyWithVideo({ source: localResultPath }, replyOptions);
+                } else {
+                    await ctx.replyWithPhoto({ source: localResultPath }, replyOptions);
+                }
+                swapSuccess = true;
+                await ctx.telegram.deleteMessage(ctx.chat.id, processingMessage.message_id);
+            } catch (apiError) {
+                console.error(`[DEBUG] CATCH BLOCK: ${apiError.message}`);
+                await ctx.telegram.editMessageText(ctx.chat.id, processingMessage.message_id, undefined, ui.messages.error).catch(() => {});
+            } finally {
+                const finalState = await stateManager.getState(userId) || state;
+                if (swapSuccess) {
+                    await db.incrementUsage(userId, finalState.type);
+                }
+                fileHelper.deleteFiles([finalState.targetPath, finalState.sourcePath, localResultPath]);
+                await stateManager.clearState(userId);
+            }
+        } catch (error) {
+            console.error(`[DEBUG] CATCH BLOCK (pre-process): ${error.message}`);
+            if (processingMessage) {
+                await ctx.telegram.editMessageText(ctx.chat.id, processingMessage.message_id, undefined, ui.messages.error).catch(() => {});
+            } else {
+                await ctx.reply('❌ An error occurred.');
+            }
+            await stateManager.clearState(userId);
+        }
+    } else if (state.stage === 'awaiting_image') {
+        if (mediaType !== 'photo') {
+            return ctx.reply(ui.messages.invalidFileType);
+        }
+        let processingMessage;
+        try {
+            const extension = fileInfo.mime_type?.split('/')[1] || 'png';
+            const imagePath = await fileHelper.downloadFile(ctx, fileInfo.file_id, extension);
+            processingMessage = await ctx.reply(ui.messages.processing);
+            await stateManager.setState(userId, { ...state, imagePath });
+
+            let localResultPath;
+            let enhanceSuccess = false;
+            try {
+                const currentState = await stateManager.getState(userId);
+                if (!currentState) return;
+                const outputUrl = await apiHandler.processImageEnhance(currentState.imagePath);
+                localResultPath = await fileHelper.downloadFromUrl(outputUrl, userId);
+                const replyOptions = { caption: ui.messages.enhanceSuccess, ...ui.keyboards.mainMenu };
+
+                await ctx.replyWithPhoto({ source: localResultPath }, replyOptions);
+                enhanceSuccess = true;
+                await ctx.telegram.deleteMessage(ctx.chat.id, processingMessage.message_id);
+            } catch (apiError) {
+                console.error(`[DEBUG] CATCH BLOCK: ${apiError.message}`);
+                await ctx.telegram.editMessageText(ctx.chat.id, processingMessage.message_id, undefined, ui.messages.error).catch(() => {});
+            } finally {
+                const finalState = await stateManager.getState(userId) || state;
+                if (enhanceSuccess) {
+                    await db.incrementUsage(userId, finalState.type);
+                }
+                fileHelper.deleteFiles([finalState.imagePath, localResultPath]);
+                await stateManager.clearState(userId);
+            }
+        } catch (error) {
+            console.error(`[DEBUG] CATCH BLOCK (pre-process): ${error.message}`);
+            if (processingMessage) {
+                await ctx.telegram.editMessageText(ctx.chat.id, processingMessage.message_id, undefined, ui.messages.error).catch(() => {});
+            } else {
+                await ctx.reply('❌ An error occurred.');
+            }
+            await stateManager.clearState(userId);
+        }
+    }
+};
 
 const checkMembership = async (ctx) => {
     if (!CHANNEL_ID) return true;
@@ -59,7 +188,7 @@ bot.start(async (ctx) => {
 bot.command('cancel', async (ctx) => {
     const state = await stateManager.getState(ctx.from.id);
     if (state) {
-        fileHelper.deleteFiles([state.targetPath, state.sourcePath]);
+        fileHelper.deleteFiles([state.targetPath, state.sourcePath, state.imagePath]);
         await stateManager.clearState(ctx.from.id);
     }
     ctx.reply(ui.messages.cancel, Markup.removeKeyboard());
@@ -86,6 +215,17 @@ bot.action('start_photo_swap', async (ctx) => {
     await ctx.reply(ui.messages.sendTargetPhoto, { parse_mode: 'Markdown' });
     await ctx.answerCbQuery();
 });
+
+bot.action('start_image_enhance', async (ctx) => {
+    if (!await checkMembership(ctx)) {
+        await ctx.answerCbQuery();
+        return sendMembershipPrompt(ctx);
+    }
+    await stateManager.setState(ctx.from.id, { type: 'image_enhance', stage: 'awaiting_image' });
+    await ctx.reply(ui.messages.sendEnhanceImage, { parse_mode: 'Markdown' });
+    await ctx.answerCbQuery();
+});
+
 
 bot.action('check_membership', async (ctx) => {
     if (await checkMembership(ctx)) {
@@ -177,79 +317,12 @@ bot.on('text', async (ctx) => {
     if (!await checkMembership(ctx)) return sendMembershipPrompt(ctx);
 });
 
-const handleMedia = async (ctx, mediaType, fileInfo) => {
-    const userId = ctx.from.id;
-    const state = await stateManager.getState(userId);
-
-    if (!state) {
-        if (!await checkMembership(ctx)) return sendMembershipPrompt(ctx);
-        return ctx.reply(ui.messages.invalidState);
-    }
-
-    if (state.stage === 'awaiting_target') {
-        if ((state.type === 'video' && mediaType !== 'video') || (state.type === 'photo' && mediaType !== 'photo')) {
-            return ctx.reply(ui.messages.invalidFileType);
-        }
-        const downloadMessage = await ctx.reply("✅ File received. Processing...");
-        try {
-            const extension = mediaType === 'video' ? 'mp4' : (fileInfo.mime_type?.split('/')[1] || 'png');
-            const targetPath = await fileHelper.downloadFile(ctx, fileInfo.file_id, extension);
-            const newState = { ...state, stage: 'awaiting_source', targetPath };
-            if (state.type === 'video') {
-                newState.duration = Math.min(fileInfo.duration, 60);
-            }
-            await stateManager.setState(userId, newState);
-            await ctx.telegram.deleteMessage(ctx.chat.id, downloadMessage.message_id);
-            await ctx.reply(ui.messages.sendSourceFace, { parse_mode: 'Markdown' });
-        } catch (downloadError) {
-            console.error(`[DEBUG] Target Download Error:`, downloadError);
-            await ctx.telegram.editMessageText(ctx.chat.id, downloadMessage.message_id, undefined, '❌ Error downloading file.').catch(() => {});
-            await stateManager.clearState(userId);
-        }
-    } else if (state.stage === 'awaiting_source') {
-        if (mediaType !== 'photo') {
-            return ctx.reply('Invalid file type for source face.', { parse_mode: 'Markdown' });
-        }
-        let processingMessage;
-        try {
-            const extension = fileInfo.mime_type?.split('/')[1] || 'png';
-            const sourcePath = await fileHelper.downloadFile(ctx, fileInfo.file_id, extension);
-            processingMessage = await ctx.reply(ui.messages.processing);
-            await stateManager.setState(userId, { ...state, sourcePath });
-
-            let localResultPath;
-            let swapSuccess = false;
-            try {
-                const currentState = await stateManager.getState(userId);
-                if (!currentState) return;
-                const outputUrl = await apiHandler.processSwap(currentState.type, currentState.targetPath, currentState.sourcePath, currentState.duration);
-                localResultPath = await fileHelper.downloadFromUrl(outputUrl, userId);
-                const replyOptions = { caption: ui.messages.success, ...ui.keyboards.mainMenu };
-
-                if (currentState.type === 'video') {
-                    await ctx.replyWithVideo({ source: localResultPath }, replyOptions);
-                } else {
-                    await ctx.replyWithPhoto({ source: localResultPath }, replyOptions);
-                }
-                swapSuccess = true;
-                await ctx.telegram.deleteMessage(ctx.chat.id, processingMessage.message_id);
-            } catch (apiError) {
-                console.error(`[DEBUG] CATCH BLOCK: ${apiError.message}`);
-                await ctx.telegram.editMessageText(ctx.chat.id, processingMessage.message_id, undefined, ui.messages.error).catch(() => {});
-            } finally {
-                const finalState = await stateManager.getState(userId) || state;
-                if (swapSuccess) {
-                    await db.incrementUsage(userId, finalState.type);
-                }
-                fileHelper.deleteFiles([finalState.targetPath, finalState.sourcePath, localResultPath]);
-                await stateManager.clearState(userId);
-            }
-        } catch (error) {
-            console.error(`[DEBUG] CATCH BLOCK (pre-process): ${error.message}`);
-            await ctx.reply('❌ An error occurred.');
-            await stateManager.clearState(userId);
-        }
-    }
+// This is the main handler that calls the long-running processMedia function without awaiting it.
+const handleMedia = (ctx, mediaType, fileInfo) => {
+    processMedia(ctx, mediaType, fileInfo).catch(err => {
+        console.error("Unhandled error in processMedia:", err);
+        ctx.reply(ui.messages.error).catch(() => {});
+    });
 };
 
 bot.on('video', (ctx) => handleMedia(ctx, 'video', ctx.message.video));

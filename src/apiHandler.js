@@ -195,6 +195,67 @@ async function checkPhotoStatus(requestId, authToken) {
   throw new Error('Polling timed out for photo task.');
 }
 
+// --- Image Enhance Functions ---
+
+async function submitImageEnhanceTask(imageUrl, authToken) {
+  try {
+    const payload = {
+      image_url: imageUrl,
+      scale: 4,
+      version: 'v1.4',
+    };
+    const response = await axios.post(`${API_BASE_URL}/api/image/image-enhance/create-task`, payload, {
+      headers: {
+        'Content-Type': 'application/json',
+        'authorization': authToken,
+        'Origin': 'https://arting.ai',
+        'Referer': 'https://arting.ai/',
+      },
+    });
+    if (response.data?.code === 100000 && response.data.data?.task_id) {
+      return response.data.data.task_id;
+    } else {
+      throw new Error(`Failed to submit image enhance task: ${response.data?.message || 'Unknown error'}`);
+    }
+  } catch (error) {
+    console.error('Error submitting image enhance task:', error.response ? error.response.data : error.message);
+    throw error;
+  }
+}
+
+async function checkImageEnhanceStatus(taskId, authToken) {
+  let attempts = 0;
+  const maxAttempts = 120; // 10 minutes
+
+  while (attempts < maxAttempts) {
+    attempts++;
+    try {
+      const resultEndpoint = `/api/image/image-enhance/get-task-result?task_id=${taskId}`;
+      const response = await axios.get(`${API_BASE_URL}${resultEndpoint}`, {
+        headers: {
+          'authorization': authToken,
+          'Origin': 'https://arting.ai',
+          'Referer': 'https://arting.ai/',
+        },
+      });
+
+      if (response.data?.code === 100000) {
+        const resultData = response.data.data;
+        if (resultData.status === 1 && resultData.task_result?.file_oss_path) {
+          return resultData.task_result.file_oss_path;
+        } else if (resultData.status === -1) {
+          throw new Error(`Task failed with status: ${resultData.status}`);
+        }
+      }
+    } catch (error) {
+      console.error(`Attempt ${attempts}: Error checking image enhance status:`, error.response ? error.response.data : error.message);
+      if (attempts >= maxAttempts) throw error;
+    }
+    await new Promise(resolve => setTimeout(resolve, POLLING_INTERVAL_MS));
+  }
+  throw new Error('Polling timed out for image enhance task.');
+}
+
 
 // --- Main Public Function ---
 
@@ -250,4 +311,34 @@ const processSwap = async (type, targetPath, sourcePath, duration) => {
   return outputUrl;
 };
 
-module.exports = { processSwap };
+const processImageEnhance = async (imagePath) => {
+    const authToken = randomUUID();
+
+    console.log(`[DEBUG] apiHandler.processImageEnhance: Received imagePath: ${imagePath}`);
+
+    if (!imagePath || typeof imagePath !== 'string') {
+        console.error("[DEBUG] FATAL: processImageEnhance received an undefined or invalid path.");
+        throw new Error("processImageEnhance received an undefined path. Check bot.js logs.");
+    }
+
+    console.log(`[${authToken}] Starting image enhance task...`);
+
+    const imageExt = path.extname(imagePath).substring(1);
+    const imageContentType = `image/${imageExt}`;
+
+    const imageUrls = await getSignedUrl(imageExt);
+
+    console.log(`[${authToken}] Uploading file...`);
+    await uploadFile(imageUrls.put, imagePath, imageContentType);
+    console.log(`[${authToken}] Upload complete.`);
+
+    console.log(`[${authToken}] Submitting image enhance task...`);
+    const taskId = await submitImageEnhanceTask(imageUrls.get, authToken);
+    console.log(`[${authToken}] Polling image enhance task: ${taskId}`);
+    const outputUrl = await checkImageEnhanceStatus(taskId, authToken);
+
+    console.log(`[${authToken}] Task complete. Output: ${outputUrl}`);
+    return outputUrl;
+};
+
+module.exports = { processSwap, processImageEnhance };

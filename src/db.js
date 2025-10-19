@@ -29,6 +29,7 @@ const initDb = async () => {
       last_seen TIMESTAMPTZ DEFAULT NOW(),
       photo_swaps_used INT DEFAULT 0,
       video_swaps_used INT DEFAULT 0,
+      image_enhances_used INT DEFAULT 0,
       premium_start_date TIMESTAMPTZ,
       premium_end_date TIMESTAMPTZ
     );
@@ -62,13 +63,22 @@ const upsertUser = async (user) => {
 };
 
 const incrementUsage = async (userId, type) => {
-  const columnToIncrement = type === 'video' ? 'video_swaps_used' : 'photo_swaps_used';
-  const queryText = `UPDATE users SET ${columnToIncrement} = ${columnToIncrement} + 1 WHERE id = $1;`;
-  try {
-    await pool.query(queryText, [userId]);
-  } catch (err) {
-    console.error(`[DB] Error incrementing usage for user ${userId}:`, err);
-  }
+    let columnToIncrement;
+    if (type === 'video') {
+        columnToIncrement = 'video_swaps_used';
+    } else if (type === 'photo') {
+        columnToIncrement = 'photo_swaps_used';
+    } else if (type === 'image_enhance') {
+        columnToIncrement = 'image_enhances_used';
+    } else {
+        return;
+    }
+    const queryText = `UPDATE users SET ${columnToIncrement} = ${columnToIncrement} + 1 WHERE id = $1;`;
+    try {
+        await pool.query(queryText, [userId]);
+    } catch (err) {
+        console.error(`[DB] Error incrementing usage for user ${userId}:`, err);
+    }
 };
 
 const getAdminStats = async () => {
@@ -76,10 +86,11 @@ const getAdminStats = async () => {
     try {
         const todayStart = new Date();
         todayStart.setHours(0, 0, 0, 0);
-        const [totalUsersRes, photoSwapsRes, videoSwapsRes, newUsersRes, activeUsersRes] = await Promise.all([
+        const [totalUsersRes, photoSwapsRes, videoSwapsRes, imageEnhancesRes, newUsersRes, activeUsersRes] = await Promise.all([
             client.query('SELECT COUNT(*) FROM users;'),
             client.query('SELECT SUM(photo_swaps_used) FROM users;'),
             client.query('SELECT SUM(video_swaps_used) FROM users;'),
+            client.query('SELECT SUM(image_enhances_used) FROM users;'),
             client.query('SELECT COUNT(*) FROM users WHERE created_at >= $1;', [todayStart]),
             client.query('SELECT COUNT(*) FROM users WHERE last_seen >= $1;', [todayStart])
         ]);
@@ -89,12 +100,13 @@ const getAdminStats = async () => {
             totalUsers: parseInt(totalUsersRes.rows[0].count, 10),
             totalPhotoSwaps: parseInt(photoSwapsRes.rows[0].sum, 10) || 0,
             totalVideoSwaps: parseInt(videoSwapsRes.rows[0].sum, 10) || 0,
+            totalImageEnhances: parseInt(imageEnhancesRes.rows[0].sum, 10) || 0,
             newUsersToday: newToday,
             repeatedUsersToday: activeToday - newToday,
         };
     } catch (err) {
         console.error('[DB] Error fetching admin stats:', err);
-        return { totalUsers: 0, totalPhotoSwaps: 0, totalVideoSwaps: 0, newUsersToday: 0, repeatedUsersToday: 0 };
+        return { totalUsers: 0, totalPhotoSwaps: 0, totalVideoSwaps: 0, totalImageEnhances: 0, newUsersToday: 0, repeatedUsersToday: 0 };
     } finally {
         client.release();
     }

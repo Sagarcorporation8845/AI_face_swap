@@ -4,313 +4,268 @@ const stateManager = require('./stateManager');
 const apiHandler = require('./apiHandler');
 const fileHelper = require('./fileHelper');
 const ui = require('./ui');
-const path = require('path');
+const db = require('./db');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-const CHANNEL_ID = process.env.CHANNEL_ID; // Your Telegram Group/Channel ID
+const CHANNEL_ID = process.env.CHANNEL_ID;
+const ADMIN_ID = process.env.ADMIN_ID ? parseInt(process.env.ADMIN_ID, 10) : null;
 
-// --- Helper function to check channel membership ---
 const checkMembership = async (ctx) => {
-  if (!CHANNEL_ID) {
-    console.warn('[WARNING] CHANNEL_ID is not set in .env. Skipping membership check.');
-    return true;
-  }
-
-  try {
-    const member = await ctx.telegram.getChatMember(CHANNEL_ID, ctx.from.id);
-    const isMember = ['creator', 'administrator', 'member'].includes(member.status);
-    console.log(`[DEBUG] User ${ctx.from.id} membership status in ${CHANNEL_ID}: ${member.status}. Is member: ${isMember}`);
-    return isMember;
-  } catch (error) {
-    console.error(`[ERROR] Failed to check membership for user ${ctx.from.id} in channel ${CHANNEL_ID}:`, error.message);
-    if (error.response && error.response.error_code === 400 && error.response.description.includes('chat not found')) {
-      console.error('[ERROR] CHANNEL_ID might be incorrect or bot is not an admin in the channel.');
-      await ctx.reply('Error: Could not verify channel. Please contact support.');
-      return false;
+    if (!CHANNEL_ID) return true;
+    try {
+        const member = await ctx.telegram.getChatMember(CHANNEL_ID, ctx.from.id);
+        return ['creator', 'administrator', 'member'].includes(member.status);
+    } catch (error) {
+        console.error(`[ERROR] Membership check failed for ${ctx.from.id}:`, error.message);
+        return false;
     }
-    return false;
-  }
 };
 
 const sendMembershipPrompt = async (ctx) => {
-  try {
-    const chat = await ctx.telegram.getChat(CHANNEL_ID);
-    const groupLink = chat.invite_link || `https://t.me/${chat.username}`;
-    await ctx.reply(ui.messages.membershipRequired, ui.keyboards.joinGroup(groupLink));
-  } catch (error) {
-    console.error(`[ERROR] Failed to get chat link for CHANNEL_ID ${CHANNEL_ID}:`, error.message);
-    await ctx.reply("I can't get the group link right now. Please try again later or contact support.", ui.keyboards.mainMenu);
-  }
+    try {
+        const chat = await ctx.telegram.getChat(CHANNEL_ID);
+        const groupLink = chat.invite_link || `https://t.me/${chat.username}`;
+        await ctx.reply(ui.messages.membershipRequired, ui.keyboards.joinGroup(groupLink));
+    } catch (error) {
+        console.error(`[ERROR] Failed to get chat link for ${CHANNEL_ID}:`, error.message);
+        await ctx.reply("Could not get the group link. Please try again later.", ui.keyboards.mainMenu);
+    }
 };
 
-
-// === COMMANDS ===
+const sendAdminPanel = async (ctx) => {
+    if (!ADMIN_ID || ctx.from.id !== ADMIN_ID) {
+        return ctx.reply('⛔ You are not authorized to use this command.');
+    }
+    try {
+        const stats = await db.getAdminStats();
+        const message = ui.messages.adminHeader + ui.messages.adminStats(stats) + ui.messages.adminFooter;
+        await ctx.reply(message, { ...ui.keyboards.adminPanel, parse_mode: 'HTML' });
+    } catch (error) {
+        console.error("Error sending admin panel:", error);
+        await ctx.reply("❌ Error fetching admin stats.");
+    }
+};
 
 bot.start(async (ctx) => {
-  console.log(`[DEBUG] User ${ctx.from.id} executing /start`);
-  await stateManager.clearState(ctx.from.id);
-
-  const isMember = await checkMembership(ctx);
-  if (!isMember) {
-    await sendMembershipPrompt(ctx);
-  } else {
-    await ctx.reply(ui.messages.welcome, ui.keyboards.mainMenu);
-  }
+    await db.upsertUser(ctx.from);
+    await stateManager.clearState(ctx.from.id);
+    if (!await checkMembership(ctx)) {
+        await sendMembershipPrompt(ctx);
+    } else {
+        await ctx.reply(ui.messages.welcome, ui.keyboards.mainMenu);
+    }
 });
 
 bot.command('cancel', async (ctx) => {
-  console.log(`[DEBUG] User ${ctx.from.id} executing /cancel`);
-  const state = await stateManager.getState(ctx.from.id);
-  if (state) {
-    fileHelper.deleteFiles([state.targetPath, state.sourcePath]);
-    await stateManager.clearState(ctx.from.id);
-  }
-  ctx.reply(ui.messages.cancel, Markup.removeKeyboard());
+    const state = await stateManager.getState(ctx.from.id);
+    if (state) {
+        fileHelper.deleteFiles([state.targetPath, state.sourcePath]);
+        await stateManager.clearState(ctx.from.id);
+    }
+    ctx.reply(ui.messages.cancel, Markup.removeKeyboard());
 });
 
-// === ACTIONS (Button Clicks) ===
+bot.command('admin', sendAdminPanel);
 
 bot.action('start_video_swap', async (ctx) => {
-  console.log(`[DEBUG] User ${ctx.from.id} clicked 'start_video_swap'`);
-  const isMember = await checkMembership(ctx);
-  if (!isMember) {
+    if (!await checkMembership(ctx)) {
+        await ctx.answerCbQuery();
+        return sendMembershipPrompt(ctx);
+    }
+    await stateManager.setState(ctx.from.id, { type: 'video', stage: 'awaiting_target' });
+    await ctx.reply(ui.messages.sendTargetVideo, { parse_mode: 'Markdown' });
     await ctx.answerCbQuery();
-    return sendMembershipPrompt(ctx);
-  }
-  await stateManager.setState(ctx.from.id, { type: 'video', stage: 'awaiting_target' });
-  await ctx.reply(ui.messages.sendTargetVideo, { parse_mode: 'Markdown' });
-  await ctx.answerCbQuery();
 });
 
 bot.action('start_photo_swap', async (ctx) => {
-  console.log(`[DEBUG] User ${ctx.from.id} clicked 'start_photo_swap'`);
-  const isMember = await checkMembership(ctx);
-  if (!isMember) {
+    if (!await checkMembership(ctx)) {
+        await ctx.answerCbQuery();
+        return sendMembershipPrompt(ctx);
+    }
+    await stateManager.setState(ctx.from.id, { type: 'photo', stage: 'awaiting_target' });
+    await ctx.reply(ui.messages.sendTargetPhoto, { parse_mode: 'Markdown' });
     await ctx.answerCbQuery();
-    return sendMembershipPrompt(ctx);
-  }
-  await stateManager.setState(ctx.from.id, { type: 'photo', stage: 'awaiting_target' });
-  await ctx.reply(ui.messages.sendTargetPhoto, { parse_mode: 'Markdown' });
-  await ctx.answerCbQuery();
 });
 
 bot.action('check_membership', async (ctx) => {
-  console.log(`[DEBUG] User ${ctx.from.id} clicked 'check_membership'`);
-  await ctx.answerCbQuery();
-  const isMember = await checkMembership(ctx);
-  if (isMember) {
-    try {
-        await ctx.editMessageText(ui.messages.membershipVerified, ui.keyboards.mainMenu);
-    } catch (error) {
-        console.error(`[ERROR] Failed to edit message after membership verification: ${error.message}`);
-        await ctx.reply(ui.messages.membershipVerified, ui.keyboards.mainMenu);
+    if (await checkMembership(ctx)) {
+        await ctx.editMessageText(ui.messages.membershipVerified, ui.keyboards.mainMenu).catch(() => {});
+    } else {
+        await ctx.answerCbQuery("It seems you haven't joined yet. Please join the group and try again.", { show_alert: true });
     }
-    await stateManager.clearState(ctx.from.id);
-  } else {
-    const chat = await ctx.telegram.getChat(CHANNEL_ID);
-    const groupLink = chat.invite_link || `https://t.me/${chat.username}`;
-    await ctx.reply(ui.messages.membershipFailed, ui.keyboards.joinGroup(groupLink));
-  }
 });
 
-
-// === MEDIA HANDLERS ===
-
-const handleMedia = async (ctx, mediaType, fileInfo) => {
-  const userId = ctx.from.id;
-  const state = await stateManager.getState(userId);
-
-  console.log(`[DEBUG] User ${userId}: handleMedia triggered for type: ${mediaType}`);
-
-  if (!state) {
-    console.log(`[DEBUG] User ${userId}: No state found. Checking membership.`);
-    const isMember = await checkMembership(ctx);
-    if (!isMember) {
-      return sendMembershipPrompt(ctx);
-    }
-    return ctx.reply(ui.messages.invalidState);
-  }
-
-  // --- STAGE 1: Awaiting Target File ---
-  if (state.stage === 'awaiting_target') {
-    console.log(`[DEBUG] User ${userId}: In 'awaiting_target' stage.`);
-    if ((state.type === 'video' && mediaType !== 'video') || (state.type === 'photo' && mediaType !== 'photo')) {
-        console.log(`[DEBUG] User ${userId}: Invalid file type for target. Expected ${state.type}, got ${mediaType}.`);
-        return ctx.reply(ui.messages.invalidFileType);
-    }
-
-    const downloadMessage = await ctx.reply("✅ File received. Processing...");
-
-    (async () => {
-        try {
-            let extension = mediaType === 'video' ? 'mp4' : (fileInfo.mime_type ? fileInfo.mime_type.split('/')[1] : 'png');
-            console.log(`[DEBUG] User ${userId}: File extension set to: ${extension}`);
-
-            const targetPath = await fileHelper.downloadFile(ctx, fileInfo.file_id, extension);
-            console.log(`[DEBUG] User ${userId}: Stage 1 Downloaded target file to: ${targetPath}`);
-
-            if (!targetPath || typeof targetPath !== 'string') {
-                throw new Error("File download resulted in an invalid path.");
-            }
-
-            const newState = { ...state, stage: 'awaiting_source', targetPath };
-            if (state.type === 'video') {
-                const videoDuration = fileInfo.duration; 
-                newState.duration = Math.min(videoDuration, 60);
-                console.log(`[DEBUG] User ${userId}: Original video duration: ${videoDuration}s. Capped duration: ${newState.duration}s.`);
-            }
-
-            console.log(`[DEBUG] User ${userId}: Stage 1 Setting new state:`, JSON.stringify(newState, null, 2));
-            await stateManager.setState(userId, newState);
-
-            await ctx.telegram.deleteMessage(ctx.chat.id, downloadMessage.message_id);
-            await ctx.reply(ui.messages.sendSourceFace, { parse_mode: 'Markdown' });
-
-        } catch (downloadError) {
-            console.error(`[DEBUG] User ${userId} (BG Task): Target Download Error:`, downloadError);
-            await ctx.telegram.editMessageText(ctx.chat.id, downloadMessage.message_id, undefined, '❌ Error downloading file. Please try again.');
-            await stateManager.clearState(userId);
-        }
-    })();
-    return;
-  }
-
-  // --- STAGE 2: Awaiting Source Face ---
-  if (state.stage === 'awaiting_source') {
-    console.log(`[DEBUG] User ${userId}: In 'awaiting_source' stage.`);
-    if (mediaType !== 'photo') {
-      console.log(`[DEBUG] User ${userId}: Invalid source file type. Expected 'photo', got ${mediaType}.`);
-      return ctx.reply('Invalid file type. Please send a PNG or JPG image for the **source face**.', { parse_mode: 'Markdown' });
-    }
-
-    let extension = fileInfo.mime_type ? fileInfo.mime_type.split('/')[1] : 'png';
-    console.log(`[DEBUG] User ${userId}: Source file extension set to: ${extension}`);
-
-    let processingMessage;
+bot.action('admin_refresh', async (ctx) => {
+    if (ctx.from.id !== ADMIN_ID) return ctx.answerCbQuery('⛔ Unauthorized');
     try {
-      const sourcePath = await fileHelper.downloadFile(ctx, fileInfo.file_id, extension);
-      console.log(`[DEBUG] User ${userId}: Stage 2 Downloaded source file to: ${sourcePath}`);
-
-      if (!sourcePath || typeof sourcePath !== 'string') {
-        throw new Error("Source file download resulted in an invalid path.");
-      }
-
-      processingMessage = await ctx.reply(ui.messages.processing);
-      await stateManager.setState(userId, { ...state, sourcePath, processingMessageId: processingMessage.message_id });
-
-      console.log(`[DEBUG] User ${userId}: Handing off to API processor.`);
-
-      (async () => {
-        let localResultPath; // Define here to access in finally block
-        try {
-          const currentState = await stateManager.getState(userId);
-          if (!currentState) {
-            console.log(`[DEBUG] User ${userId} (BG Task): Task was cancelled. Aborting.`);
-            return;
-          }
-
-          const outputUrl = await apiHandler.processSwap(
-            currentState.type,
-            currentState.targetPath,
-            currentState.sourcePath,
-            currentState.duration
-          );
-
-          // --- FIX APPLIED HERE ---
-          // 1. Download the final result from the URL to our server.
-          console.log(`[DEBUG] User ${userId} (BG Task): Downloading final result from URL...`);
-          localResultPath = await fileHelper.downloadFromUrl(outputUrl, userId);
-
-          const replyOptions = {
-            caption: ui.messages.success,
-            ...ui.keyboards.mainMenu
-          };
-
-          // 2. Send the downloaded local file instead of the URL.
-          if (currentState.type === 'video') {
-            await ctx.replyWithVideo({ source: localResultPath }, replyOptions);
-          } else {
-            await ctx.replyWithPhoto({ source: localResultPath }, replyOptions);
-          }
-
-          await ctx.telegram.deleteMessage(ctx.chat.id, processingMessage.message_id);
-
-        } catch (apiError) {
-          console.error(`[DEBUG] User ${userId} (BG Task): CATCH BLOCK: ${apiError.message}`);
-          try {
-            await ctx.telegram.editMessageText(ctx.chat.id, processingMessage.message_id, undefined, ui.messages.error);
-          } catch (editError) {
-            console.error(`[DEBUG] User ${userId} (BG Task): Failed to edit message, sending new one. Reason: ${editError.message}`);
-            await ctx.reply(ui.messages.error);
-          }
-
-        } finally {
-          console.log(`[DEBUG] User ${userId} (BG Task): Running 'finally' block. Cleaning up files.`);
-          const finalState = await stateManager.getState(userId) || state;
-          // 3. Make sure the downloaded result file is also deleted.
-          fileHelper.deleteFiles([finalState.targetPath, finalState.sourcePath, localResultPath]);
-          await stateManager.clearState(userId);
-        }
-      })();
-
+        const stats = await db.getAdminStats();
+        const message = ui.messages.adminHeader + ui.messages.adminStats(stats) + ui.messages.adminFooter;
+        await ctx.editMessageText(message, { ...ui.keyboards.adminPanel, parse_mode: 'HTML' });
     } catch (error) {
-      console.error(`[DEBUG] User ${userId}: CATCH BLOCK (pre-process): ${error.message}`);
-      await ctx.reply('❌ An error occurred. Please try again.');
-      await stateManager.clearState(userId);
+        await ctx.answerCbQuery('❌ Error refreshing stats', { show_alert: true });
     }
-  }
+});
+
+bot.action('admin_grant_premium', async (ctx) => {
+    if (ctx.from.id !== ADMIN_ID) return ctx.answerCbQuery('⛔ Unauthorized');
+    await stateManager.setState(ADMIN_ID, { admin_task: 'grant_premium', stage: 'awaiting_user_id' });
+    await ctx.editMessageText(ui.messages.adminGrantAskUserId, { ...ui.keyboards.cancelGrant, parse_mode: 'Markdown' });
+});
+
+bot.action('admin_cancel_grant', async (ctx) => {
+    if (ctx.from.id !== ADMIN_ID) return ctx.answerCbQuery('⛔ Unauthorized');
+    await stateManager.clearState(ADMIN_ID);
+    await ctx.editMessageText(ui.messages.adminGrantCancelled);
+    const stats = await db.getAdminStats();
+    const message = ui.messages.adminHeader + ui.messages.adminStats(stats) + ui.messages.adminFooter;
+    await ctx.reply(message, { ...ui.keyboards.adminPanel, parse_mode: 'HTML' });
+});
+
+const grantPremiumForDays = async (ctx, days) => {
+    if (ctx.from.id !== ADMIN_ID) return ctx.answerCbQuery('⛔ Unauthorized');
+    const state = await stateManager.getState(ADMIN_ID);
+    if (!state || state.admin_task !== 'grant_premium' || !state.target_user_id) return;
+    
+    await db.setPremiumStatus(state.target_user_id, days);
+    const message = ui.messages.adminGrantSuccess(state.target_user_info, days);
+    
+    if (ctx.updateType === 'callback_query') {
+        await ctx.editMessageText(message, { parse_mode: 'Markdown' });
+    } else {
+        await ctx.reply(message, { parse_mode: 'Markdown' });
+    }
+    await stateManager.clearState(ADMIN_ID);
 };
 
-// Listen for video and photo uploads
+bot.action(/premium_days_(\d+)/, (ctx) => grantPremiumForDays(ctx, parseInt(ctx.match[1], 10)));
+
+bot.action('premium_days_custom', async (ctx) => {
+    if (ctx.from.id !== ADMIN_ID) return ctx.answerCbQuery('⛔ Unauthorized');
+    await stateManager.setState(ADMIN_ID, { ...(await stateManager.getState(ADMIN_ID)), stage: 'awaiting_custom_days' });
+    await ctx.editMessageText(ui.messages.adminGrantAskCustomDays, ui.keyboards.cancelGrant);
+});
+
+bot.on('text', async (ctx) => {
+    if (ctx.from.id === ADMIN_ID) {
+        const adminState = await stateManager.getState(ADMIN_ID);
+        if (adminState?.admin_task === 'grant_premium') {
+            if (adminState.stage === 'awaiting_user_id') {
+                const identifier = ctx.message.text;
+                
+                const userInfo = await db.findUserByIdOrUsername(identifier);
+                if (!userInfo) {
+                    return ctx.reply(ui.messages.adminGrantUserNotFound(identifier), { parse_mode: 'Markdown' });
+                }
+                
+                await stateManager.setState(ADMIN_ID, { ...adminState, stage: 'awaiting_duration', target_user_id: userInfo.id, target_user_info: userInfo });
+                return ctx.reply(ui.messages.adminGrantAskDuration(userInfo), { ...ui.keyboards.premiumDuration, parse_mode: 'Markdown' });
+            }
+            if (adminState.stage === 'awaiting_custom_days') {
+                const days = parseInt(ctx.message.text, 10);
+                if (isNaN(days) || days <= 0) {
+                    return ctx.reply(ui.messages.adminGrantInvalidDays);
+                }
+                return grantPremiumForDays(ctx, days);
+            }
+        }
+    }
+    
+    const userState = await stateManager.getState(ctx.from.id);
+    if (userState) {
+        return ctx.reply("Please send a valid file. Use /cancel to restart.");
+    }
+    if (!await checkMembership(ctx)) return sendMembershipPrompt(ctx);
+});
+
+const handleMedia = async (ctx, mediaType, fileInfo) => {
+    const userId = ctx.from.id;
+    const state = await stateManager.getState(userId);
+
+    if (!state) {
+        if (!await checkMembership(ctx)) return sendMembershipPrompt(ctx);
+        return ctx.reply(ui.messages.invalidState);
+    }
+
+    if (state.stage === 'awaiting_target') {
+        if ((state.type === 'video' && mediaType !== 'video') || (state.type === 'photo' && mediaType !== 'photo')) {
+            return ctx.reply(ui.messages.invalidFileType);
+        }
+        const downloadMessage = await ctx.reply("✅ File received. Processing...");
+        try {
+            const extension = mediaType === 'video' ? 'mp4' : (fileInfo.mime_type?.split('/')[1] || 'png');
+            const targetPath = await fileHelper.downloadFile(ctx, fileInfo.file_id, extension);
+            const newState = { ...state, stage: 'awaiting_source', targetPath };
+            if (state.type === 'video') {
+                newState.duration = Math.min(fileInfo.duration, 60);
+            }
+            await stateManager.setState(userId, newState);
+            await ctx.telegram.deleteMessage(ctx.chat.id, downloadMessage.message_id);
+            await ctx.reply(ui.messages.sendSourceFace, { parse_mode: 'Markdown' });
+        } catch (downloadError) {
+            console.error(`[DEBUG] Target Download Error:`, downloadError);
+            await ctx.telegram.editMessageText(ctx.chat.id, downloadMessage.message_id, undefined, '❌ Error downloading file.').catch(() => {});
+            await stateManager.clearState(userId);
+        }
+    } else if (state.stage === 'awaiting_source') {
+        if (mediaType !== 'photo') {
+            return ctx.reply('Invalid file type for source face.', { parse_mode: 'Markdown' });
+        }
+        let processingMessage;
+        try {
+            const extension = fileInfo.mime_type?.split('/')[1] || 'png';
+            const sourcePath = await fileHelper.downloadFile(ctx, fileInfo.file_id, extension);
+            processingMessage = await ctx.reply(ui.messages.processing);
+            await stateManager.setState(userId, { ...state, sourcePath });
+
+            let localResultPath;
+            let swapSuccess = false;
+            try {
+                const currentState = await stateManager.getState(userId);
+                if (!currentState) return;
+                const outputUrl = await apiHandler.processSwap(currentState.type, currentState.targetPath, currentState.sourcePath, currentState.duration);
+                localResultPath = await fileHelper.downloadFromUrl(outputUrl, userId);
+                const replyOptions = { caption: ui.messages.success, ...ui.keyboards.mainMenu };
+
+                if (currentState.type === 'video') {
+                    await ctx.replyWithVideo({ source: localResultPath }, replyOptions);
+                } else {
+                    await ctx.replyWithPhoto({ source: localResultPath }, replyOptions);
+                }
+                swapSuccess = true;
+                await ctx.telegram.deleteMessage(ctx.chat.id, processingMessage.message_id);
+            } catch (apiError) {
+                console.error(`[DEBUG] CATCH BLOCK: ${apiError.message}`);
+                await ctx.telegram.editMessageText(ctx.chat.id, processingMessage.message_id, undefined, ui.messages.error).catch(() => {});
+            } finally {
+                const finalState = await stateManager.getState(userId) || state;
+                if (swapSuccess) {
+                    await db.incrementUsage(userId, finalState.type);
+                }
+                fileHelper.deleteFiles([finalState.targetPath, finalState.sourcePath, localResultPath]);
+                await stateManager.clearState(userId);
+            }
+        } catch (error) {
+            console.error(`[DEBUG] CATCH BLOCK (pre-process): ${error.message}`);
+            await ctx.reply('❌ An error occurred.');
+            await stateManager.clearState(userId);
+        }
+    }
+};
+
 bot.on('video', (ctx) => handleMedia(ctx, 'video', ctx.message.video));
-
-bot.on('document', async (ctx) => {
-  const document = ctx.message.document;
-  if (document && document.mime_type && document.mime_type.startsWith('image/')) {
-    console.log(`[DEBUG] User ${ctx.from.id}: Received document identified as image: ${document.mime_type}`);
-    const mockPhoto = {
-      file_id: document.file_id,
-      file_size: document.file_size,
-      mime_type: document.mime_type,
-    };
-    return handleMedia(ctx, 'photo', mockPhoto);
-  } else {
-    console.log(`[DEBUG] User ${ctx.from.id}: Received non-image document.`);
-    const state = await stateManager.getState(ctx.from.id);
-    if (state) {
-      return ctx.reply("Please send a valid file. Use /cancel to restart.");
-    }
-    const isMember = await checkMembership(ctx);
-    if (!isMember) {
-      return sendMembershipPrompt(ctx);
-    }
-    return ctx.reply(ui.messages.invalidState, ui.keyboards.mainMenu);
-  }
-});
-
 bot.on('photo', (ctx) => handleMedia(ctx, 'photo', ctx.message.photo.pop()));
-
-// Handle other message types
-bot.on('message', async (ctx) => {
-  if (ctx.message.text) {
-    console.log(`[DEBUG] User ${ctx.from.id}: Received text message.`);
-    const state = await stateManager.getState(ctx.from.id);
-    if (state) {
-      return ctx.reply("Please send a valid file. Use /cancel to restart.");
+bot.on('document', async (ctx) => {
+    if (ctx.message.document?.mime_type?.startsWith('image/')) {
+        const mockPhoto = { file_id: ctx.message.document.file_id, mime_type: ctx.message.document.mime_type };
+        return handleMedia(ctx, 'photo', mockPhoto);
     }
-    const isMember = await checkMembership(ctx);
-    if (!isMember) {
-      return sendMembershipPrompt(ctx);
-    }
-    return ctx.reply(ui.messages.invalidState, ui.keyboards.mainMenu);
-  }
 });
 
-
-bot.launch(() => {
-  console.log('Bot is up and running...');
+db.initDb().then(() => {
+    bot.launch(() => {
+        console.log(`Bot is up and running... Admin ID: ${ADMIN_ID || 'Not set'}`);
+    });
 });
 
-// Enable graceful stop
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));

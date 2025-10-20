@@ -3,7 +3,7 @@ const { Telegraf, Markup } = require('telegraf');
 const stateManager = require('./stateManager');
 const apiHandler = require('./apiHandler');
 const fileHelper = require('./fileHelper');
-const ui =require('./ui');
+const ui = require('./ui');
 const db = require('./db');
 
 // Correctly configure the Telegraf bot with an increased API timeout
@@ -266,14 +266,55 @@ const grantPremiumForDays = async (ctx, days) => {
     const state = await stateManager.getState(ADMIN_ID);
     if (!state || state.admin_task !== 'grant_premium' || !state.target_user_id) return;
     
+    // Update database
     await db.setPremiumStatus(state.target_user_id, days);
-    const message = ui.messages.adminGrantSuccess(state.target_user_info, days);
+    
+    // --- START: Send notification to the user ---
+    
+    // Calculate dates for the notification message
+    const startDate = new Date();
+    const endDate = new Date();
+    endDate.setDate(startDate.getDate() + days);
+    endDate.setHours(23, 59, 59, 999);
+
+    // Format dates for readability
+    const options = { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' };
+    const formattedStartDate = startDate.toLocaleString('en-US', options);
+    const formattedEndDate = endDate.toLocaleString('en-US', options);
+
+    // Construct the message for the user
+    const userMessage = `
+🎉 **Congratulations!** 🎉
+
+Your premium access has been activated.
+
+**Start Date:** ${formattedStartDate}
+**End Date:** ${formattedEndDate}
+
+Enjoy the premium features!
+    `;
+
+    // Send the notification to the user
+    try {
+        await bot.telegram.sendMessage(state.target_user_id, userMessage, { parse_mode: 'Markdown' });
+    } catch (error) {
+        console.error(`Failed to send premium notification to user ${state.target_user_id}:`, error.message);
+        // Optionally, inform the admin that the notification failed
+        await ctx.reply(`⚠️ Could not send a notification to the user. They might have blocked the bot.`);
+    }
+
+    // --- END: Send notification to the user ---
+
+    // Inform the admin
+    const adminMessage = ui.messages.adminGrantSuccess(state.target_user_info, days);
     
     if (ctx.updateType === 'callback_query') {
-        await ctx.editMessageText(message, { parse_mode: 'Markdown' });
+        await ctx.editMessageText(adminMessage, { parse_mode: 'Markdown' });
     } else {
-        await ctx.reply(message, { parse_mode: 'Markdown' });
+        await ctx.reply(adminMessage, { parse_mode: 'Markdown' });
     }
+
+    // Clear admin state
     await stateManager.clearState(ADMIN_ID);
 };
 

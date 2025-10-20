@@ -287,6 +287,10 @@ const processSwap = async (type, targetPath, sourcePath, duration) => {
   const targetUrls = await getSignedUrl(targetExt);
   const sourceUrls = await getSignedUrl(sourceExt);
 
+  // ADDED LOGS FOR UPLOADED FILE URLS
+  console.log(`[${authToken}] Target File URL: ${targetUrls.get}`);
+  console.log(`[${authToken}] Source File URL: ${sourceUrls.get}`);
+
   console.log(`[${authToken}] Uploading files...`);
   await Promise.all([
     uploadFile(targetUrls.put, targetPath, targetContentType),
@@ -327,6 +331,9 @@ const processImageEnhance = async (imagePath) => {
     const imageContentType = `image/${imageExt}`;
 
     const imageUrls = await getSignedUrl(imageExt);
+
+    // ADDED LOG FOR UPLOADED FILE URL
+    console.log(`[${authToken}] Image File URL: ${imageUrls.get}`);
 
     console.log(`[${authToken}] Uploading file...`);
     await uploadFile(imageUrls.put, imagePath, imageContentType);

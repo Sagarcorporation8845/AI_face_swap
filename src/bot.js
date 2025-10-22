@@ -5,6 +5,7 @@ const apiHandler = require('./apiHandler');
 const fileHelper = require('./fileHelper');
 const ui = require('./ui');
 const db = require('./db');
+const express = require('express'); // <-- NEW: For keep-alive server
 
 // Correctly configure the Telegraf bot with an increased API timeout
 const bot = new Telegraf(process.env.BOT_TOKEN, {
@@ -375,11 +376,31 @@ bot.on('document', async (ctx) => {
     }
 });
 
+// --- NEW: Keep-alive web server ---
+const app = express();
+const port = process.env.PORT || 3000; // Replit automatically sets the PORT env var
+
+app.get('/', (req, res) => {
+  res.send('Bot is alive and polling!'); // Simple response for UptimeRobot
+});
+// --- End of new web server code ---
+
+
+// --- MODIFIED: Main application start ---
 db.initDb().then(() => {
+    
+    // Start the keep-alive server first
+    app.listen(port, () => {
+      console.log(`Keep-alive server running on port ${port}`);
+    });
+
+    // Then launch the bot
     bot.launch(() => {
         console.log(`Bot is up and running... Admin ID: ${ADMIN_ID || 'Not set'}`);
     });
+    
 });
+// --- End of modification ---
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));

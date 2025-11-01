@@ -182,7 +182,21 @@ const getUser = async (userId) => {
   const queryText = 'SELECT * FROM users WHERE id = $1;';
   try {
     const res = await pool.query(queryText, [userId]);
-    return res.rows[0] || null;
+
+    const user = res.rows[0];
+
+    if (user && user.is_premium && user.premium_end_date && new Date(user.premium_end_date) < new Date()) {
+      // Premium has expired, update the user in the DB
+      const updateQuery = 'UPDATE users SET is_premium = FALSE WHERE id = $1;';
+      await pool.query(updateQuery, [userId]);
+
+      // Update the user object in memory before returning
+      user.is_premium = false;
+      console.log(`[DB] Deactivated expired premium for user ${userId}.`);
+    }
+
+    return user || null;
+    
   } catch (err) {
     console.error(`[DB] Error fetching user ${userId}:`, err);
     return null;

@@ -90,7 +90,8 @@ const messages = {
 
   botSettings: "⚙️ **Bot Settings**\n\nManage the bot's global settings from here.",
   setPremiumContact: "👤 **Set Premium Contact**\n\nPlease enter the username for premium inquiries (e.g., `@your_admin`). This will be shown to non-premium users when they reach their daily limit.",
-  premiumContactSet: (username) => `✅ **Success!**\n\nThe premium contact has been updated to ${username}.`,
+  premiumContactSet: (username) => `✅ <b>Success!</b>\n\nThe premium contact has been updated to ${username}.`,
+
   premiumContactCancelled: "❌ **Cancelled**\n\nThe 'Set Premium Contact' operation has been cancelled."
 };
 

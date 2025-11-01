@@ -431,7 +431,7 @@ bot.on('text', async (ctx) => {
             }
             await redisClient.set('premium_contact_username', username);
             await stateManager.clearState(ADMIN_ID);
-            await ctx.reply(ui.messages.premiumContactSet(username), { parse_mode: 'Markdown' });
+            await ctx.reply(ui.messages.premiumContactSet(username), { parse_mode: 'HTML' });
         }
     }
     

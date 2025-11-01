@@ -234,6 +234,9 @@ bot.action('start_video_swap', async (ctx) => {
     if (!await checkUsage(ctx, 'video')) {
         return ctx.answerCbQuery();
     }
+    if (!await checkUsage(ctx, 'video')) {
+        return ctx.answerCbQuery();
+    }
     await stateManager.setState(ctx.from.id, { type: 'video', stage: 'awaiting_target' });
     await ctx.reply(ui.messages.sendTargetVideo, { parse_mode: 'Markdown' });
     await ctx.answerCbQuery();
@@ -243,12 +246,18 @@ bot.action('start_photo_swap', async (ctx) => {
     if (!await checkUsage(ctx, 'photo')) {
         return ctx.answerCbQuery();
     }
+    if (!await checkUsage(ctx, 'photo')) {
+        return ctx.answerCbQuery();
+    }
     await stateManager.setState(ctx.from.id, { type: 'photo', stage: 'awaiting_target' });
     await ctx.reply(ui.messages.sendTargetPhoto, { parse_mode: 'Markdown' });
     await ctx.answerCbQuery();
 });
 
 bot.action('start_image_enhance', async (ctx) => {
+    if (!await checkUsage(ctx, 'image_enhance')) {
+        return ctx.answerCbQuery();
+    }
     if (!await checkUsage(ctx, 'image_enhance')) {
         return ctx.answerCbQuery();
     }

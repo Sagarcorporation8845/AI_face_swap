@@ -31,7 +31,11 @@ const initDb = async () => {
       video_swaps_used INT DEFAULT 0,
       image_enhances_used INT DEFAULT 0,
       premium_start_date TIMESTAMPTZ,
-      premium_end_date TIMESTAMPTZ
+      premium_end_date TIMESTAMPTZ,
+      daily_photo_swaps INT DEFAULT 0,
+      daily_video_swaps INT DEFAULT 0,
+      daily_image_enhances INT DEFAULT 0,
+      last_active_date TIMESTAMPTZ
     );
   `;
 

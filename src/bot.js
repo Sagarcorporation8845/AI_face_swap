@@ -243,6 +243,7 @@ bot.action('admin_refresh', async (ctx) => {
         const message = ui.messages.adminHeader + ui.messages.adminStats(stats) + ui.messages.adminFooter;
         await ctx.editMessageText(message, { ...ui.keyboards.adminPanel, parse_mode: 'HTML' });
     } catch (error) {
+        console.error('Error refreshing admin stats:', error);
         await ctx.answerCbQuery('❌ Error refreshing stats', { show_alert: true });
     }
 });

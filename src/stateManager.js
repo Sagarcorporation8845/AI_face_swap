@@ -82,4 +82,4 @@ const clearState = async (userId) => {
   }
 };
 
-module.exports = { setState, getState, clearState };
+module.exports = { setState, getState, clearState, redisClient: client };

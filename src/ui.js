@@ -14,6 +14,12 @@ const keyboards = {
   adminPanel: Markup.inlineKeyboard([
     [Markup.button.callback('📊 Refresh Stats', 'admin_refresh')],
     [Markup.button.callback('👑 Grant Premium', 'admin_grant_premium')],
+    [Markup.button.callback('⚙️ Bot Settings', 'admin_bot_settings')],
+  ]),
+
+  botSettingsPanel: Markup.inlineKeyboard([
+    [Markup.button.callback('👤 Set Premium Contact', 'admin_set_premium_contact')],
+    [Markup.button.callback('⬅️ Back to Admin Panel', 'admin_back_to_main')],
   ]),
 
   premiumDuration: Markup.inlineKeyboard([
@@ -30,6 +36,10 @@ const keyboards = {
 
   cancelGrant: Markup.inlineKeyboard([
     Markup.button.callback('❌ Cancel', 'admin_cancel_grant')
+  ]),
+
+  cancelSettingContact: Markup.inlineKeyboard([
+    Markup.button.callback('❌ Cancel', 'admin_cancel_setting_contact')
   ]),
 };
 
@@ -76,7 +86,12 @@ const messages = {
   adminGrantAskCustomDays: "⚙️ **Custom Duration**\n\nPlease enter the number of days for the premium subscription (e.g., 45).",
   adminGrantInvalidDays: "⚠️ **Invalid Number**\n\nPlease enter a valid number of days.",
   adminGrantSuccess: (userInfo, days) => `✅ **Success!**\n\nUser \`${userInfo.first_name}\` (ID: \`${userInfo.id}\`) has been granted premium access for <b>${days} day(s)</b>.`,
-  adminGrantCancelled: "❌ **Cancelled**\n\nThe premium grant operation has been cancelled."
+  adminGrantCancelled: "❌ **Cancelled**\n\nThe premium grant operation has been cancelled.",
+
+  botSettings: "⚙️ **Bot Settings**\n\nManage the bot's global settings from here.",
+  setPremiumContact: "👤 **Set Premium Contact**\n\nPlease enter the username for premium inquiries (e.g., `@your_admin`). This will be shown to non-premium users when they reach their daily limit.",
+  premiumContactSet: (username) => `✅ **Success!**\n\nThe premium contact has been updated to ${username}.`,
+  premiumContactCancelled: "❌ **Cancelled**\n\nThe 'Set Premium Contact' operation has been cancelled."
 };
 
 module.exports = { keyboards, messages };

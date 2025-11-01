@@ -182,7 +182,6 @@ const getUser = async (userId) => {
   const queryText = 'SELECT * FROM users WHERE id = $1;';
   try {
     const res = await pool.query(queryText, [userId]);
-
     const user = res.rows[0];
 
     if (user && user.is_premium && user.premium_end_date && new Date(user.premium_end_date) < new Date()) {
@@ -196,7 +195,6 @@ const getUser = async (userId) => {
     }
 
     return user || null;
-    
   } catch (err) {
     console.error(`[DB] Error fetching user ${userId}:`, err);
     return null;
@@ -220,4 +218,15 @@ const resetDailyLimits = async (userId) => {
   }
 };
 
-module.exports = { pool, initDb, upsertUser, incrementUsage, getAdminStats, findUserByIdOrUsername, setPremiumStatus, getUser, resetDailyLimits };
+const getAllUserIds = async () => {
+  const queryText = 'SELECT id FROM users;';
+  try {
+    const res = await pool.query(queryText);
+    return res.rows.map(row => row.id);
+  } catch (err) {
+    console.error('[DB] Error fetching all user IDs:', err);
+    return [];
+  }
+};
+
+module.exports = { pool, initDb, upsertUser, incrementUsage, getAdminStats, findUserByIdOrUsername, setPremiumStatus, getUser, resetDailyLimits, getAllUserIds };

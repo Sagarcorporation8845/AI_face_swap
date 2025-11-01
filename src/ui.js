@@ -15,6 +15,7 @@ const keyboards = {
     [Markup.button.callback('📊 Refresh Stats', 'admin_refresh')],
     [Markup.button.callback('👑 Grant Premium', 'admin_grant_premium')],
     [Markup.button.callback('⚙️ Bot Settings', 'admin_bot_settings')],
+    [Markup.button.callback('📣 Broadcast', 'admin_broadcast')],
   ]),
 
   botSettingsPanel: Markup.inlineKeyboard([
@@ -40,6 +41,11 @@ const keyboards = {
 
   cancelSettingContact: Markup.inlineKeyboard([
     Markup.button.callback('❌ Cancel', 'admin_cancel_setting_contact')
+  ]),
+
+  confirmBroadcast: Markup.inlineKeyboard([
+    [Markup.button.callback('✅ Confirm Send to ALL Users', 'admin_confirm_broadcast')],
+    [Markup.button.callback('❌ Cancel', 'admin_cancel_broadcast')]
   ]),
 };
 
@@ -91,7 +97,13 @@ const messages = {
   botSettings: "⚙️ **Bot Settings**\n\nManage the bot's global settings from here.",
   setPremiumContact: "👤 **Set Premium Contact**\n\nPlease enter the username for premium inquiries (e.g., `@your_admin`). This will be shown to non-premium users when they reach their daily limit.",
   premiumContactSet: (username) => `✅ <b>Success!</b>\n\nThe premium contact has been updated to ${username}.`,
-  premiumContactCancelled: "❌ **Cancelled**\n\nThe 'Set Premium Contact' operation has been cancelled."
+  premiumContactCancelled: "❌ **Cancelled**\n\nThe 'Set Premium Contact' operation has been cancelled.",
+
+  broadcastAskMessage: "📣 **Broadcast Mode**\n\nPlease send the message you want to broadcast to all users. It can be text, a photo, a video, or any other message type.",
+  broadcastConfirmation: "⚠️ **Please Confirm**\n\nThis message will be sent to ALL users. Please confirm you want to proceed.",
+  broadcastCancelled: "❌ **Broadcast Cancelled**\n\nThe operation has been cancelled.",
+  broadcastStarted: (count) => `🚀 **Broadcast Started**\n\nSending the message to approximately ${count} users. You will receive a confirmation when it's complete.`,
+  broadcastComplete: (success, failed) => `✅ **Broadcast Complete**\n\nSent to: ${success} users\nFailed for: ${failed} users`
 };
 
 module.exports = { keyboards, messages };

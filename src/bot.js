@@ -231,9 +231,8 @@ bot.command('cancel', async (ctx) => {
 bot.command('admin', sendAdminPanel);
 
 bot.action('start_video_swap', async (ctx) => {
-    if (!await checkMembership(ctx)) {
-        await ctx.answerCbQuery();
-        return sendMembershipPrompt(ctx);
+    if (!await checkUsage(ctx, 'video')) {
+        return ctx.answerCbQuery();
     }
     if (!await checkUsage(ctx, 'video')) {
         return ctx.answerCbQuery();
@@ -244,9 +243,8 @@ bot.action('start_video_swap', async (ctx) => {
 });
 
 bot.action('start_photo_swap', async (ctx) => {
-    if (!await checkMembership(ctx)) {
-        await ctx.answerCbQuery();
-        return sendMembershipPrompt(ctx);
+    if (!await checkUsage(ctx, 'photo')) {
+        return ctx.answerCbQuery();
     }
     if (!await checkUsage(ctx, 'photo')) {
         return ctx.answerCbQuery();
@@ -257,9 +255,8 @@ bot.action('start_photo_swap', async (ctx) => {
 });
 
 bot.action('start_image_enhance', async (ctx) => {
-    if (!await checkMembership(ctx)) {
-        await ctx.answerCbQuery();
-        return sendMembershipPrompt(ctx);
+    if (!await checkUsage(ctx, 'image_enhance')) {
+        return ctx.answerCbQuery();
     }
     if (!await checkUsage(ctx, 'image_enhance')) {
         return ctx.answerCbQuery();
@@ -337,6 +334,55 @@ bot.action('admin_cancel_setting_contact', async (ctx) => {
   await ctx.reply(message, { ...ui.keyboards.adminPanel, parse_mode: 'HTML' });
 });
 
+bot.action('admin_broadcast', async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCbQuery('⛔ Unauthorized');
+  await stateManager.setState(ADMIN_ID, { admin_task: 'broadcast_awaiting_message' });
+  await ctx.editMessageText(ui.messages.broadcastAskMessage, { parse_mode: 'Markdown' });
+});
+
+bot.action('admin_confirm_broadcast', async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCbQuery('⛔ Unauthorized');
+
+  const state = await stateManager.getState(ADMIN_ID);
+  if (!state || state.admin_task !== 'broadcast_awaiting_message' || !state.broadcast_message_id) {
+    return ctx.editMessageText('❌ Error: Could not find a message to broadcast. Please start again.');
+  }
+
+  const userIds = await db.getAllUserIds();
+  if (userIds.length === 0) {
+    return ctx.editMessageText('❌ No users found to broadcast to.');
+  }
+
+  await ctx.editMessageText(ui.messages.broadcastStarted(userIds.length));
+
+  let successCount = 0;
+  let failCount = 0;
+
+  for (const userId of userIds) {
+    try {
+      await bot.telegram.copyMessage(userId, state.broadcast_chat_id, state.broadcast_message_id);
+      successCount++;
+    } catch (error) {
+      failCount++;
+      console.error(`[Broadcast] Failed to send to user ${userId}:`, error.message);
+    }
+    await new Promise(resolve => setTimeout(resolve, 50)); // 50ms delay
+  }
+
+  await ctx.reply(ui.messages.broadcastComplete(successCount, failCount));
+  await stateManager.clearState(ADMIN_ID);
+});
+
+bot.action('admin_cancel_broadcast', async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCbQuery('⛔ Unauthorized');
+  await stateManager.clearState(ADMIN_ID);
+  await ctx.editMessageText(ui.messages.broadcastCancelled);
+  // Re-send the main admin panel
+  const stats = await db.getAdminStats();
+  const message = ui.messages.adminHeader + ui.messages.adminStats(stats) + ui.messages.adminFooter;
+  await ctx.reply(message, { ...ui.keyboards.adminPanel, parse_mode: 'HTML' });
+});
+
 const grantPremiumForDays = async (ctx, days) => {
     if (ctx.from.id !== ADMIN_ID) return ctx.answerCbQuery('⛔ Unauthorized');
     const state = await stateManager.getState(ADMIN_ID);
@@ -402,44 +448,70 @@ bot.action('premium_days_custom', async (ctx) => {
     await ctx.editMessageText(ui.messages.adminGrantAskCustomDays, ui.keyboards.cancelGrant);
 });
 
-bot.on('text', async (ctx) => {
-    if (ctx.from.id === ADMIN_ID) {
-        const adminState = await stateManager.getState(ADMIN_ID);
-        if (adminState?.admin_task === 'grant_premium') {
-            if (adminState.stage === 'awaiting_user_id') {
-                const identifier = ctx.message.text;
-                
-                const userInfo = await db.findUserByIdOrUsername(identifier);
-                if (!userInfo) {
-                    return ctx.reply(ui.messages.adminGrantUserNotFound(identifier), { parse_mode: 'Markdown' });
-                }
-                
-                await stateManager.setState(ADMIN_ID, { ...adminState, stage: 'awaiting_duration', target_user_id: userInfo.id, target_user_info: userInfo });
-                return ctx.reply(ui.messages.adminGrantAskDuration(userInfo), { ...ui.keyboards.premiumDuration, parse_mode: 'Markdown' });
-            }
-            if (adminState.stage === 'awaiting_custom_days') {
-                const days = parseInt(ctx.message.text, 10);
-                if (isNaN(days) || days <= 0) {
-                    return ctx.reply(ui.messages.adminGrantInvalidDays);
-                }
-                return grantPremiumForDays(ctx, days);
-            }
-        } else if (adminState?.admin_task === 'set_premium_contact') {
-            const username = ctx.message.text.trim();
-            if (!username.startsWith('@')) {
-                return ctx.reply('Invalid username. Please make sure it starts with @.');
-            }
-            await redisClient.set('premium_contact_username', username);
-            await stateManager.clearState(ADMIN_ID);
-            await ctx.reply(ui.messages.premiumContactSet(username), { parse_mode: 'HTML' });
+bot.on('message', async (ctx) => {
+  const userId = ctx.from.id;
+
+  // --- Admin Task Handling ---
+  if (userId === ADMIN_ID) {
+    const adminState = await stateManager.getState(ADMIN_ID);
+    if (adminState) {
+      if (adminState.admin_task === 'grant_premium') {
+        if (adminState.stage === 'awaiting_user_id' && ctx.message.text) {
+          const identifier = ctx.message.text;
+          const userInfo = await db.findUserByIdOrUsername(identifier);
+          if (!userInfo) {
+            return ctx.reply(ui.messages.adminGrantUserNotFound(identifier), { parse_mode: 'Markdown' });
+          }
+          await stateManager.setState(ADMIN_ID, { ...adminState, stage: 'awaiting_duration', target_user_id: userInfo.id, target_user_info: userInfo });
+          return ctx.reply(ui.messages.adminGrantAskDuration(userInfo), { ...ui.keyboards.premiumDuration, parse_mode: 'Markdown' });
         }
+        if (adminState.stage === 'awaiting_custom_days' && ctx.message.text) {
+          const days = parseInt(ctx.message.text, 10);
+          if (isNaN(days) || days <= 0) {
+            return ctx.reply(ui.messages.adminGrantInvalidDays);
+          }
+          return grantPremiumForDays(ctx, days);
+        }
+      } else if (adminState.admin_task === 'set_premium_contact' && ctx.message.text) {
+        const username = ctx.message.text.trim();
+        if (!username.startsWith('@')) {
+          return ctx.reply('Invalid username. Please make sure it starts with @.');
+        }
+        await redisClient.set('premium_contact_username', username);
+        await stateManager.clearState(ADMIN_ID);
+        await ctx.reply(ui.messages.premiumContactSet(username), { parse_mode: 'HTML' });
+        return;
+      } else if (adminState.admin_task === 'broadcast_awaiting_message') {
+        await stateManager.setState(ADMIN_ID, {
+          ...adminState,
+          broadcast_message_id: ctx.message.message_id,
+          broadcast_chat_id: ctx.chat.id
+        });
+
+        // Forward the message back to the admin for confirmation
+        await ctx.telegram.copyMessage(ADMIN_ID, ctx.chat.id, ctx.message.message_id);
+        await ctx.reply(ui.messages.broadcastConfirmation, { ...ui.keyboards.confirmBroadcast, parse_mode: 'Markdown' });
+        return;
+      }
     }
-    
-    const userState = await stateManager.getState(ctx.from.id);
-    if (userState) {
-        return ctx.reply("Please send a valid file. Use /cancel to restart.");
+  }
+
+  // --- Regular User Message Handling ---
+  const userState = await stateManager.getState(userId);
+  if (userState) {
+    // This part handles file uploads for ongoing tasks
+    if (ctx.message.video || ctx.message.photo || ctx.message.document) {
+      const mediaType = ctx.message.video ? 'video' : 'photo';
+      const fileInfo = ctx.message.video || ctx.message.photo.pop() || (ctx.message.document.mime_type.startsWith('image/') ? ctx.message.document : null);
+      if (fileInfo) {
+        return handleMedia(ctx, mediaType, fileInfo);
+      }
     }
-    if (!await checkMembership(ctx)) return sendMembershipPrompt(ctx);
+    return ctx.reply("Please send a valid file. Use /cancel to restart.");
+  }
+
+  // Default response for non-admin text messages if no state is active
+  if (!await checkMembership(ctx)) return sendMembershipPrompt(ctx);
 });
 
 // This is the main handler that calls the long-running processMedia function without awaiting it.
@@ -450,14 +522,6 @@ const handleMedia = (ctx, mediaType, fileInfo) => {
     });
 };
 
-bot.on('video', (ctx) => handleMedia(ctx, 'video', ctx.message.video));
-bot.on('photo', (ctx) => handleMedia(ctx, 'photo', ctx.message.photo.pop()));
-bot.on('document', async (ctx) => {
-    if (ctx.message.document?.mime_type?.startsWith('image/')) {
-        const mockPhoto = { file_id: ctx.message.document.file_id, mime_type: ctx.message.document.mime_type };
-        return handleMedia(ctx, 'photo', mockPhoto);
-    }
-});
 
 // --- NEW: Keep-alive web server ---
 const app = express();

@@ -242,9 +242,14 @@ bot.action('admin_refresh', async (ctx) => {
         const stats = await db.getAdminStats();
         const message = ui.messages.adminHeader + ui.messages.adminStats(stats) + ui.messages.adminFooter;
         await ctx.editMessageText(message, { ...ui.keyboards.adminPanel, parse_mode: 'HTML' });
+        await ctx.answerCbQuery('✅ Stats refreshed successfully!');
     } catch (error) {
-        console.error('Error refreshing admin stats:', error);
-        await ctx.answerCbQuery('❌ Error refreshing stats', { show_alert: true });
+        if (error.description && error.description.includes('message is not modified')) {
+            await ctx.answerCbQuery('ℹ️ Stats are already up-to-date.', { show_alert: false });
+        } else {
+            console.error('Error refreshing admin stats:', error);
+            await ctx.answerCbQuery('❌ Error refreshing stats', { show_alert: true });
+        }
     }
 });
 

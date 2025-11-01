@@ -5,7 +5,8 @@ const apiHandler = require('./apiHandler');
 const fileHelper = require('./fileHelper');
 const ui = require('./ui');
 const db = require('./db');
-const express = require('express'); // <-- NEW: For keep-alive server
+const express = require('express');
+const { redisClient } = require('./stateManager');
 
 // Correctly configure the Telegraf bot with an increased API timeout
 const bot = new Telegraf(process.env.BOT_TOKEN, {
@@ -176,6 +177,38 @@ const sendAdminPanel = async (ctx) => {
     }
 };
 
+const checkUsage = async (ctx, feature) => {
+  const user = await db.getUser(ctx.from.id);
+  if (!user || user.is_premium) {
+    return true;
+  }
+
+  const today = new Date().setHours(0, 0, 0, 0);
+  const lastActive = user.last_active_date ? new Date(user.last_active_date).setHours(0, 0, 0, 0) : null;
+
+  if (lastActive !== today) {
+    await db.resetDailyLimits(ctx.from.id);
+    user.daily_photo_swaps = 0;
+    user.daily_video_swaps = 0;
+    user.daily_image_enhances = 0;
+  }
+
+  const limits = {
+    photo: { count: user.daily_photo_swaps, limit: 2, feature: 'photo swaps' },
+    video: { count: user.daily_video_swaps, limit: 1, feature: 'video swaps' },
+    image_enhance: { count: user.daily_image_enhances, limit: 3, feature: 'image enhances' },
+  };
+
+  if (limits[feature].count >= limits[feature].limit) {
+    const contact = await redisClient.get('premium_contact_username') || '@admin';
+    const message = `❌ You have used all ${limits[feature].limit} of your free ${limits[feature].feature} for today. For unlimited, high-priority access, please contact ${contact} to purchase a premium plan.`;
+    await ctx.reply(message);
+    return false;
+  }
+
+  return true;
+};
+
 bot.start(async (ctx) => {
     await db.upsertUser(ctx.from);
     await stateManager.clearState(ctx.from.id);
@@ -202,6 +235,9 @@ bot.action('start_video_swap', async (ctx) => {
         await ctx.answerCbQuery();
         return sendMembershipPrompt(ctx);
     }
+    if (!await checkUsage(ctx, 'video')) {
+        return ctx.answerCbQuery();
+    }
     await stateManager.setState(ctx.from.id, { type: 'video', stage: 'awaiting_target' });
     await ctx.reply(ui.messages.sendTargetVideo, { parse_mode: 'Markdown' });
     await ctx.answerCbQuery();
@@ -212,6 +248,9 @@ bot.action('start_photo_swap', async (ctx) => {
         await ctx.answerCbQuery();
         return sendMembershipPrompt(ctx);
     }
+    if (!await checkUsage(ctx, 'photo')) {
+        return ctx.answerCbQuery();
+    }
     await stateManager.setState(ctx.from.id, { type: 'photo', stage: 'awaiting_target' });
     await ctx.reply(ui.messages.sendTargetPhoto, { parse_mode: 'Markdown' });
     await ctx.answerCbQuery();
@@ -221,6 +260,9 @@ bot.action('start_image_enhance', async (ctx) => {
     if (!await checkMembership(ctx)) {
         await ctx.answerCbQuery();
         return sendMembershipPrompt(ctx);
+    }
+    if (!await checkUsage(ctx, 'image_enhance')) {
+        return ctx.answerCbQuery();
     }
     await stateManager.setState(ctx.from.id, { type: 'image_enhance', stage: 'awaiting_image' });
     await ctx.reply(ui.messages.sendEnhanceImage, { parse_mode: 'Markdown' });
@@ -266,6 +308,33 @@ bot.action('admin_cancel_grant', async (ctx) => {
     const stats = await db.getAdminStats();
     const message = ui.messages.adminHeader + ui.messages.adminStats(stats) + ui.messages.adminFooter;
     await ctx.reply(message, { ...ui.keyboards.adminPanel, parse_mode: 'HTML' });
+});
+
+bot.action('admin_bot_settings', async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCbQuery('⛔ Unauthorized');
+  await ctx.editMessageText(ui.messages.botSettings, { ...ui.keyboards.botSettingsPanel, parse_mode: 'Markdown' });
+});
+
+bot.action('admin_back_to_main', async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCbQuery('⛔ Unauthorized');
+  const stats = await db.getAdminStats();
+  const message = ui.messages.adminHeader + ui.messages.adminStats(stats) + ui.messages.adminFooter;
+  await ctx.editMessageText(message, { ...ui.keyboards.adminPanel, parse_mode: 'HTML' });
+});
+
+bot.action('admin_set_premium_contact', async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCbQuery('⛔ Unauthorized');
+  await stateManager.setState(ADMIN_ID, { admin_task: 'set_premium_contact' });
+  await ctx.editMessageText(ui.messages.setPremiumContact, { ...ui.keyboards.cancelSettingContact, parse_mode: 'Markdown' });
+});
+
+bot.action('admin_cancel_setting_contact', async (ctx) => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCbQuery('⛔ Unauthorized');
+  await stateManager.clearState(ADMIN_ID);
+  await ctx.editMessageText(ui.messages.premiumContactCancelled, { parse_mode: 'Markdown' });
+  const stats = await db.getAdminStats();
+  const message = ui.messages.adminHeader + ui.messages.adminStats(stats) + ui.messages.adminFooter;
+  await ctx.reply(message, { ...ui.keyboards.adminPanel, parse_mode: 'HTML' });
 });
 
 const grantPremiumForDays = async (ctx, days) => {
@@ -355,6 +424,14 @@ bot.on('text', async (ctx) => {
                 }
                 return grantPremiumForDays(ctx, days);
             }
+        } else if (adminState?.admin_task === 'set_premium_contact') {
+            const username = ctx.message.text.trim();
+            if (!username.startsWith('@')) {
+                return ctx.reply('Invalid username. Please make sure it starts with @.');
+            }
+            await redisClient.set('premium_contact_username', username);
+            await stateManager.clearState(ADMIN_ID);
+            await ctx.reply(ui.messages.premiumContactSet(username), { parse_mode: 'HTML' });
         }
     }
     

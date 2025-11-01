@@ -34,8 +34,19 @@ const initDb = async () => {
       premium_end_date TIMESTAMPTZ
     );
   `;
+
+  const alterTableQueries = [
+    'ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_photo_swaps INT DEFAULT 0;',
+    'ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_video_swaps INT DEFAULT 0;',
+    'ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_image_enhances INT DEFAULT 0;',
+    'ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_date TIMESTAMPTZ;',
+  ];
+
   try {
     await pool.query(queryText);
+    for (const query of alterTableQueries) {
+      await pool.query(query);
+    }
     console.log('Database initialized and "users" table is ready.');
   } catch (err) {
     console.error('Error initializing database table:', err);
@@ -63,17 +74,20 @@ const upsertUser = async (user) => {
 };
 
 const incrementUsage = async (userId, type) => {
-    let columnToIncrement;
+    let columnToIncrement, dailyColumnToIncrement;
     if (type === 'video') {
         columnToIncrement = 'video_swaps_used';
+        dailyColumnToIncrement = 'daily_video_swaps';
     } else if (type === 'photo') {
         columnToIncrement = 'photo_swaps_used';
+        dailyColumnToIncrement = 'daily_photo_swaps';
     } else if (type === 'image_enhance') {
         columnToIncrement = 'image_enhances_used';
+        dailyColumnToIncrement = 'daily_image_enhances';
     } else {
         return;
     }
-    const queryText = `UPDATE users SET ${columnToIncrement} = ${columnToIncrement} + 1 WHERE id = $1;`;
+    const queryText = `UPDATE users SET ${columnToIncrement} = ${columnToIncrement} + 1, ${dailyColumnToIncrement} = ${dailyColumnToIncrement} + 1 WHERE id = $1;`;
     try {
         await pool.query(queryText, [userId]);
     } catch (err) {
@@ -160,4 +174,55 @@ const setPremiumStatus = async (userId, days) => {
   }
 };
 
-module.exports = { pool, initDb, upsertUser, incrementUsage, getAdminStats, findUserByIdOrUsername, setPremiumStatus };
+const getUser = async (userId) => {
+  const queryText = 'SELECT * FROM users WHERE id = $1;';
+  try {
+    const res = await pool.query(queryText, [userId]);
+    const user = res.rows[0];
+
+    if (user && user.is_premium && user.premium_end_date && new Date(user.premium_end_date) < new Date()) {
+      // Premium has expired, update the user in the DB
+      const updateQuery = 'UPDATE users SET is_premium = FALSE WHERE id = $1;';
+      await pool.query(updateQuery, [userId]);
+
+      // Update the user object in memory before returning
+      user.is_premium = false;
+      console.log(`[DB] Deactivated expired premium for user ${userId}.`);
+    }
+
+    return user || null;
+  } catch (err) {
+    console.error(`[DB] Error fetching user ${userId}:`, err);
+    return null;
+  }
+};
+
+const resetDailyLimits = async (userId) => {
+  const queryText = `
+    UPDATE users SET
+      daily_photo_swaps = 0,
+      daily_video_swaps = 0,
+      daily_image_enhances = 0,
+      last_active_date = NOW()
+    WHERE id = $1;
+  `;
+  try {
+    await pool.query(queryText, [userId]);
+  } catch (err)
+ {
+    console.error(`[DB] Error resetting daily limits for user ${userId}:`, err);
+  }
+};
+
+const getAllUserIds = async () => {
+  const queryText = 'SELECT id FROM users;';
+  try {
+    const res = await pool.query(queryText);
+    return res.rows.map(row => row.id);
+  } catch (err) {
+    console.error('[DB] Error fetching all user IDs:', err);
+    return [];
+  }
+};
+
+module.exports = { pool, initDb, upsertUser, incrementUsage, getAdminStats, findUserByIdOrUsername, setPremiumStatus, getUser, resetDailyLimits, getAllUserIds };

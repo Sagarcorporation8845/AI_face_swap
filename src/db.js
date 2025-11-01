@@ -82,8 +82,9 @@ const incrementUsage = async (userId, type) => {
 };
 
 const getAdminStats = async () => {
-    const client = await pool.connect();
+    let client;
     try {
+        client = await pool.connect();
         const todayStart = new Date();
         todayStart.setHours(0, 0, 0, 0);
         const [totalUsersRes, photoSwapsRes, videoSwapsRes, imageEnhancesRes, newUsersRes, activeUsersRes] = await Promise.all([
@@ -106,9 +107,11 @@ const getAdminStats = async () => {
         };
     } catch (err) {
         console.error('[DB] Error fetching admin stats:', err);
-        return { totalUsers: 0, totalPhotoSwaps: 0, totalVideoSwaps: 0, totalImageEnhances: 0, newUsersToday: 0, repeatedUsersToday: 0 };
+        throw err;
     } finally {
-        client.release();
+        if (client) {
+            client.release();
+        }
     }
 };
 
